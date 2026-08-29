@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header class="head">
+    <div class="ranks" id="ranks" aria-hidden="true">
+      <i></i><i></i><i></i>
+    </div>
+    <div class="titles">
+      <h1>Grid Sorter</h1>
+      <p class="sub">Instagram research</p>
+    </div>
+  </header>
+
+  <main>
+    <label class="field">
+      <span class="lbl">Rank by</span>
+      <select id="sortBy">
+        <option value="views">Views &middot; reels only</option>
+        <option value="outlier">Outlier score &middot; reels only</option>
+        <option value="likes">Likes</option>
+        <option value="comments">Comments</option>
+        <option value="newest">Newest first</option>
+        <option value="oldest">Oldest first</option>
+      </select>
+    </label>
+
+    <label class="field">
+      <span class="lbl">Depth</span>
+      <select id="limit">
+        <option value="24">24 posts &middot; fast</option>
+        <option value="50">50 posts</option>
+        <option value="100" selected>100 posts</option>
+        <option value="300">300 posts &middot; slow</option>
+      </select>
+    </label>
+
+    <button id="go" class="primary">Sort this profile</button>
+
+    <div id="status" class="status" role="status">Open a profile, then sort.</div>
+
+    <div class="exports">
+      <button id="csv" class="ghost" disabled>Export CSV</button>
+      <button id="json" class="ghost" disabled>Export JSON</button>
+    </div>
+
+    <button id="restore" class="link" hidden>Restore original grid</button>
+  </main>
+
+  <footer>
+    <p>Runs entirely in your browser. Nothing is uploaded.</p>
+    <p class="dim">Not affiliated with or endorsed by Instagram.</p>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>

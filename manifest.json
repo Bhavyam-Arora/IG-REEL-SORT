@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "Grid Sorter for Instagram",
+  "version": "0.1.0",
+  "description": "Sort any Instagram profile's posts and reels by views, likes, comments, or date. Everything runs locally in your browser.",
+  "permissions": ["storage", "activeTab"],
+  "host_permissions": ["https://www.instagram.com/*"],
+  "background": { "service_worker": "background.js" },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" }
+  },
+  "icons": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" },
+  "content_scripts": [
+    {
+      "matches": ["https://www.instagram.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["lib/extract.js", "page/interceptor.js", "page/collector.js"],
+      "matches": ["https://www.instagram.com/*"]
+    }
+  ]
+}

@@ -1,0 +1,181 @@
+/* Palette: ink / surface / line / text / muted / signal
+   Signal is amber because this tool ranks things, and rank reads as medal. */
+:root {
+  --ink: #17151C;
+  --surface: #221E29;
+  --line: #322C3D;
+  --text: #EFECF4;
+  --muted: #918AA0;
+  --signal: #E8A33D;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  width: 296px;
+  margin: 0;
+  padding: 0;
+  background: var(--ink);
+  color: var(--text);
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---- header + signature ---- */
+.head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 15px 16px 13px;
+  border-bottom: 1px solid var(--line);
+}
+
+/* Signature: three descending bars = a sorted list. Animates while working. */
+.ranks {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 22px;
+}
+.ranks i {
+  display: block;
+  width: 5px;
+  border-radius: 2px;
+  background: var(--signal);
+}
+.ranks i:nth-child(1) { height: 22px; }
+.ranks i:nth-child(2) { height: 15px; opacity: .72; }
+.ranks i:nth-child(3) { height: 9px;  opacity: .46; }
+
+.ranks.working i { animation: pulse .9s ease-in-out infinite; }
+.ranks.working i:nth-child(2) { animation-delay: .12s; }
+.ranks.working i:nth-child(3) { animation-delay: .24s; }
+@keyframes pulse {
+  0%, 100% { transform: scaleY(1); }
+  50%      { transform: scaleY(.45); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ranks.working i { animation: none; }
+}
+
+.titles h1 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -.02em;
+}
+.sub {
+  margin: 1px 0 0;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* ---- form ---- */
+main { padding: 14px 16px 4px; }
+
+.field { display: block; margin-bottom: 11px; }
+.lbl {
+  display: block;
+  margin-bottom: 5px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+select {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+  cursor: pointer;
+  appearance: none;
+}
+select:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+}
+
+button { font-family: var(--sans); cursor: pointer; }
+
+.primary {
+  width: 100%;
+  margin-top: 3px;
+  padding: 11px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--signal);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -.01em;
+}
+.primary:hover { filter: brightness(1.07); }
+.primary:disabled { opacity: .45; cursor: not-allowed; filter: none; }
+
+.status {
+  margin: 11px 0 12px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--muted);
+  min-height: 34px;
+}
+.status.good { color: var(--signal); border-color: rgba(232,163,61,.42); }
+.status.bad  { color: #F08A7A; border-color: rgba(240,138,122,.42); }
+
+.exports { display: flex; gap: 7px; }
+.ghost {
+  flex: 1;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+.ghost:hover:not(:disabled) { background: var(--surface); }
+.ghost:disabled { opacity: .35; cursor: not-allowed; }
+
+.link {
+  display: block;
+  width: 100%;
+  margin-top: 9px;
+  padding: 5px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 11px;
+  text-decoration: underline;
+}
+.link:hover { color: var(--text); }
+
+/* ---- footer ---- */
+footer {
+  margin-top: 12px;
+  padding: 11px 16px 13px;
+  border-top: 1px solid var(--line);
+}
+footer p {
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+footer .dim { color: #6E6880; margin-top: 2px; }
