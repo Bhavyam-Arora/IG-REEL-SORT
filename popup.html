@@ -50,10 +50,25 @@
     </div>
 
     <button id="restore" class="link" hidden>Restore original grid</button>
+
+    <details class="tools">
+      <summary>Transcription</summary>
+      <label class="field">
+        <span class="lbl">Groq API key</span>
+        <input id="groqKey" type="password" placeholder="gsk_…" autocomplete="off" spellcheck="false" />
+      </label>
+      <div id="keyStatus" class="status dim" role="status">
+        Stored locally. Needed for the Transcribe button on video tiles.
+      </div>
+      <p class="dim">
+        Free key at <span class="mono">console.groq.com/keys</span>. Audio is sent
+        to Groq to be transcribed; nothing else leaves your browser.
+      </p>
+    </details>
   </main>
 
   <footer>
-    <p>Runs entirely in your browser. Nothing is uploaded.</p>
+    <p>Sorting runs entirely in your browser.</p>
     <p class="dim">Not affiliated with or endorsed by Instagram.</p>
   </footer>
 

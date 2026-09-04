@@ -28,6 +28,30 @@ CSV/JSON exports as `outlierScore`.
 25, 50, 100, 200, 300, or **All posts**. An all-posts run has no count to stop
 at, so it scrolls until Instagram reports no next page or the feed stalls.
 
+## Transcribe
+
+Every video tile in the sorted grid carries a **Transcribe** button. It
+downloads that reel's audio, transcribes it, and saves a `.txt` next to your
+other exports.
+
+Hindi comes back as **Hinglish** — Latin script, the way people actually type
+it — with the original Devanagari kept at the bottom of the file. English reels
+come back as-is. Language is detected automatically; you don't pick one.
+
+Set up: paste a [Groq](https://console.groq.com/keys) API key into
+**Transcription** in the popup. The free tier covers roughly 2,000 clips a day;
+paid is about $0.04 per hour of audio, so a 30-second reel costs well under a
+hundredth of a cent.
+
+Two things to know:
+
+- **Stay logged in.** Instagram's grid responses carry thumbnails and counts but
+  no playable video, so the file is looked up per-post when you click, using
+  your existing session. Logged out, the lookup is refused.
+- **This is the one feature that leaves your machine.** The audio goes to Groq
+  to be transcribed. Everything else — sorting, scoring, exporting — is still
+  entirely local.
+
 ## How it works
 
 Passive response interception. A page-world script wraps `XMLHttpRequest` and
@@ -53,6 +77,7 @@ After any code change, click the reload arrow on the extension card.
 |---|---|---|
 | `manifest.json` | — | Permissions and wiring |
 | `content.js` | isolated | Injects page scripts, renders grid, exports |
+| `background.js` | worker | Transcription: CDN fetch + Groq calls |
 | `lib/extract.js` | page | Shape-based post extraction |
 | `page/interceptor.js` | page | XHR + fetch response hooks |
 | `page/collector.js` | page | Scroll loop, sort, handoff |
@@ -60,10 +85,16 @@ After any code change, click the reload arrow on the extension card.
 
 ## Rules that must not be broken
 
-1. Never build a request to Instagram. No `doc_id`, no `query_hash`.
+1. Never build a request that depends on a rotating id. No `doc_id`, no
+   `query_hash` — those change without notice and are what break scrapers.
+   Collection stays purely passive. Transcription is the one exception and is
+   allowed two calls, both only on an explicit click: a per-post lookup at
+   `/api/v1/media/<pk>/info/` (a stable REST path with no ids in it) and the
+   signed CDN URL that returns.
 2. Trigger loading only by scrolling. Keep the 900ms delay.
 3. Match data by shape, not by name.
-4. Everything stays local. No server, no analytics.
+4. Nothing leaves the browser except audio the user explicitly sends to be
+   transcribed. No analytics, no telemetry, no server of our own — ever.
 5. Read-only. Never like, follow, comment, or post.
 
 ## Not affiliated with or endorsed by Instagram or Meta.

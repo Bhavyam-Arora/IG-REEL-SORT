@@ -4,7 +4,12 @@
   "version": "0.1.0",
   "description": "Sort any Instagram profile's posts and reels by views, likes, comments, or date. Everything runs locally in your browser.",
   "permissions": ["storage", "activeTab"],
-  "host_permissions": ["https://www.instagram.com/*"],
+  "host_permissions": [
+    "https://www.instagram.com/*",
+    "https://*.cdninstagram.com/*",
+    "https://*.fbcdn.net/*",
+    "https://api.groq.com/*"
+  ],
   "background": { "service_worker": "background.js" },
   "action": {
     "default_popup": "popup.html",

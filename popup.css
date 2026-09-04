@@ -166,6 +166,59 @@ button { font-family: var(--sans); cursor: pointer; }
 }
 .link:hover { color: var(--text); }
 
+/* ---- transcription drawer ----
+   Collapsed by default: the key is set once, but the sort controls are used
+   every session and shouldn't be pushed down the panel for it. */
+.tools {
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+.tools summary {
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  list-style: none;
+}
+.tools summary::-webkit-details-marker { display: none; }
+.tools summary::before {
+  content: "+ ";
+  color: var(--signal);
+}
+.tools[open] summary::before { content: "\2212 "; }
+.tools summary:hover { color: var(--text); }
+.tools summary:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+}
+.tools .field { margin-top: 10px; }
+.tools p {
+  margin: 0 0 4px;
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+input[type="password"] {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+input[type="password"]:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+}
+
+.dim { color: #6E6880; }
+.mono { font-family: var(--mono); color: var(--text); }
+
 /* ---- footer ---- */
 footer {
   margin-top: 12px;

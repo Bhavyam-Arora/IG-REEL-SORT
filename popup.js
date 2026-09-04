@@ -149,6 +149,14 @@ chrome.runtime.onMessage.addListener(function (msg) {
     working(false);
     setStatus("Couldn't find the grid on this page.", "bad");
   }
+  // The tile shows its own success state, so the popup only needs to surface
+  // the failure reason — which is too long to fit on a tile.
+  if (msg.type === "transcribeError") {
+    setStatus(msg.error || "Transcription failed.", "bad");
+  }
+  if (msg.type === "transcribeDone") {
+    setStatus("Transcript saved (" + (msg.language || "unknown") + ").", "good");
+  }
 });
 
 function doExport(kind) {
@@ -165,6 +173,24 @@ function doExport(kind) {
 
 $("csv").addEventListener("click", function () { doExport("csv"); });
 $("json").addEventListener("click", function () { doExport("json"); });
+
+// ---- Groq key ----
+// Saved on every keystroke rather than behind a Save button: there is one
+// field, and a key that silently didn't persist is the worst outcome here.
+chrome.storage.local.get({ groqKey: "" }, function (o) {
+  $("groqKey").value = o.groqKey || "";
+});
+
+var keySaveTimer = null;
+$("groqKey").addEventListener("input", function () {
+  var val = $("groqKey").value.trim();
+  clearTimeout(keySaveTimer);
+  keySaveTimer = setTimeout(function () {
+    chrome.storage.local.set({ groqKey: val }, function () {
+      $("keyStatus").textContent = val ? "Key saved." : "Key cleared.";
+    });
+  }, 400);
+});
 
 $("restore").addEventListener("click", function () {
   activeTab(function (tab) {

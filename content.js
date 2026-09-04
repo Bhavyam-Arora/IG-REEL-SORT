@@ -97,10 +97,165 @@
     return (x >= 10 ? Math.round(x) : x.toFixed(1)) + "x";
   }
 
+  // Hover states can't be expressed in inline styles, so the tile button is the
+  // one thing here that needs a real stylesheet. Everything is prefixed and
+  // scoped under .igs-tile so nothing can bleed into Instagram's own UI.
+  var STYLE_ID = "ig-sorter-style";
+  var CSS = [
+    ".igs-tile{position:relative;}",
+
+    ".igs-tx{position:absolute;bottom:6px;right:6px;z-index:3;",
+    "width:28px;height:28px;padding:0;margin:0;border:0;border-radius:8px;",
+    "display:flex;align-items:center;justify-content:center;cursor:pointer;",
+    "background:rgba(23,21,28,.7);color:#EFECF4;opacity:.5;",
+    "-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);",
+    "transition:opacity .15s ease,background .15s ease,transform .12s ease;}",
+
+    // Visible at rest so it can be discovered without hovering, but held back
+    // far enough that 100 tiles don't read as 100 buttons.
+    ".igs-tile:hover .igs-tx:not(.is-busy):not(.is-done):not(.is-error)",
+    "{opacity:1;background:rgba(23,21,28,.92);}",
+    ".igs-tx:not(.is-busy):not(.is-done):not(.is-error):hover",
+    "{opacity:1;background:#E8A33D;color:#17151C;transform:scale(1.09);}",
+
+    // Keyboard users get the same affordance as the mouse, without a hover.
+    ".igs-tx:focus-visible{opacity:1;outline:2px solid #E8A33D;outline-offset:2px;}",
+
+    ".igs-tx.is-busy{opacity:1;background:rgba(23,21,28,.92);cursor:progress;}",
+    ".igs-tx.is-done{opacity:1;background:#3A7D4E;color:#fff;}",
+    ".igs-tx.is-error{opacity:1;background:#8F3A3A;color:#fff;}",
+
+    ".igs-tx.is-busy svg{animation:igs-spin .8s linear infinite;}",
+    "@keyframes igs-spin{to{transform:rotate(360deg);}}",
+    "@media (prefers-reduced-motion:reduce){",
+    ".igs-tx.is-busy svg{animation:none;}.igs-tx{transition:none;}}"
+  ].join("");
+
+  function ensureStyles() {
+    if (document.getElementById(STYLE_ID)) return;
+    var s = document.createElement("style");
+    s.id = STYLE_ID;
+    s.textContent = CSS;
+    (document.head || document.documentElement).appendChild(s);
+  }
+
+  var SVG_NS = "http://www.w3.org/2000/svg";
+
+  // Built node by node rather than through innerHTML: Instagram enforces
+  // Trusted Types on some surfaces, which rejects markup assignment outright.
+  var ICONS = {
+    // Ragged lines of text — a transcript.
+    idle: ["M5 6h14", "M5 10h14", "M5 14h10", "M5 18h7"],
+    busy: ["M12 3a9 9 0 1 0 9 9"],
+    done: ["M4.5 12.5l5 5 10-11"],
+    error: ["M6 6l12 12", "M18 6L6 18"]
+  };
+
+  function setIcon(btn, name) {
+    while (btn.firstChild) btn.removeChild(btn.firstChild);
+    var svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("width", "15");
+    svg.setAttribute("height", "15");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "2.2");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
+    ICONS[name].forEach(function (d) {
+      var path = document.createElementNS(SVG_NS, "path");
+      path.setAttribute("d", d);
+      svg.appendChild(path);
+    });
+    btn.appendChild(svg);
+  }
+
+  var IDLE_LABEL = "Transcribe this reel and download it as .txt";
+
+  // A tile is an <a> to the post, so anything placed inside it has to stop its
+  // own clicks from navigating away mid-transcription.
+  function buildTranscribeButton(p) {
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "igs-tx";
+    btn.title = IDLE_LABEL;
+    btn.setAttribute("aria-label", IDLE_LABEL);
+    setIcon(btn, "idle");
+
+    function state(name, label) {
+      btn.classList.remove("is-busy", "is-done", "is-error");
+      if (name !== "idle") btn.classList.add("is-" + name);
+      setIcon(btn, name);
+      btn.title = label;
+      btn.setAttribute("aria-label", label);
+    }
+
+    btn.addEventListener("click", function (ev) {
+      // Without both of these the tile's <a> navigates to the post and the
+      // in-flight transcription dies with the page.
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (btn.disabled) return;
+
+      btn.disabled = true;
+      state("busy", "Transcribing…");
+
+      var settle = function (name, label) {
+        btn.disabled = false;
+        state(name, label);
+        // Return to idle so it can be run again — an expired link and a rate
+        // limit both clear up, and a saved transcript may want re-downloading.
+        setTimeout(function () {
+          state("idle", IDLE_LABEL);
+        }, 4000);
+      };
+
+      chrome.runtime.sendMessage({ type: "transcribe", post: p }, function (res) {
+        if (chrome.runtime.lastError || !res) {
+          settle("error", "Extension worker unavailable — reload the extension.");
+          tellPopup({ type: "transcribeError", error: "Extension worker unavailable." });
+          return;
+        }
+        if (!res.ok) {
+          settle("error", res.error || "Transcription failed");
+          tellPopup({ type: "transcribeError", error: res.error });
+          return;
+        }
+        downloadTranscript(p, res.result);
+        settle("done", "Saved — click to download again");
+        tellPopup({ type: "transcribeDone", code: p.code, language: res.result.language });
+      });
+    });
+
+    return btn;
+  }
+
+  function downloadTranscript(p, r) {
+    var head = [
+      "Instagram transcript",
+      "URL:       " + (p.url || ""),
+      "Posted:    " + (p.createdAt || "unknown"),
+      "Language:  " + r.language + (r.romanised ? " (romanised to Latin script)" : ""),
+      "Generated: " + new Date().toISOString(),
+      ""
+    ];
+    var body = [r.text];
+    // The native-script original is kept below the Hinglish so nothing Whisper
+    // heard is lost to the romanisation pass.
+    if (r.original) body.push("", "--- original script ---", "", r.original);
+
+    download(
+      profileSlug() + "-" + (p.code || "reel") + ".txt",
+      head.concat(body).join("\n") + "\n",
+      "text/plain"
+    );
+  }
+
   function buildGrid(posts, sortBy, ranked, median) {
     if (ranked === null || ranked === undefined) ranked = posts.length;
     // Which metric the outlier score is measured on, or null for a plain sort.
     var outlierOn = OUTLIER_FIELD[sortBy] || null;
+    ensureStyles();
 
     var wrap = document.createElement("div");
     wrap.id = "ig-sorter-wrap";
@@ -156,6 +311,9 @@
       tile.href = p.url || "#";
       tile.target = "_blank";
       tile.rel = "noopener noreferrer";
+      // The class is what the transcribe button's hover rule hangs off; the
+      // positioning stays inline to match the rest of the grid.
+      tile.className = "igs-tile";
       tile.style.cssText =
         "position:relative;display:block;aspect-ratio:1/1;overflow:hidden;" +
         "background:#221E29;text-decoration:none;";
@@ -198,9 +356,18 @@
         tile.appendChild(score);
       }
 
+      // Every video gets a button. Deliberately NOT gated on p.videoUrl:
+      // Instagram's grid queries return thumbnails and counts but no playable
+      // rendition, so gating on it hid the button on literally every tile. The
+      // URL is resolved at click time instead.
+      var canTranscribe = !!p.isVideo;
+      if (canTranscribe) tile.appendChild(buildTranscribeButton(p));
+
       var meta = document.createElement("div");
       meta.style.cssText =
-        "position:absolute;left:0;right:0;bottom:0;padding:16px 8px 7px;" +
+        "position:absolute;left:0;right:0;bottom:0;" +
+        // Keep the stats clear of the transcribe button in the same corner.
+        "padding:16px " + (canTranscribe ? "42px" : "8px") + " 7px 8px;" +
         "background:linear-gradient(transparent,rgba(23,21,28,.88));" +
         "color:#fff;display:flex;gap:9px;flex-wrap:wrap;" +
         "font:600 11px/1 ui-monospace,SFMono-Regular,Menlo,monospace;";
@@ -290,7 +457,17 @@
   function exportData(kind) {
     if (!LAST.length) return;
     if (kind === "json") {
-      download(profileSlug() + "-sorted.json", JSON.stringify(LAST, null, 2), "application/json");
+      // videoUrl is a signed CDN link that dies within hours. Writing it into a
+      // file people keep would ship a column of URLs that are already broken by
+      // the time anyone opens it.
+      var clean = LAST.map(function (p) {
+        var c = {};
+        for (var k in p) {
+          if (Object.prototype.hasOwnProperty.call(p, k) && k !== "videoUrl") c[k] = p[k];
+        }
+        return c;
+      });
+      download(profileSlug() + "-sorted.json", JSON.stringify(clean, null, 2), "application/json");
       return;
     }
     var cols = ["code", "url", "views", "likes", "comments", "createdAt", "isVideo", "caption"];
