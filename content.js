@@ -76,7 +76,20 @@
   // ---------------------------------------------------------------
   // 3. Render
   // ---------------------------------------------------------------
-  var METRIC_SORTS = { views: 1, likes: 1, comments: 1, outlier: 1 };
+  var OUTLIER_FIELD = {
+    outlier: "views",
+    outlierLikes: "likes",
+    outlierComments: "comments"
+  };
+
+  var METRIC_SORTS = {
+    views: 1,
+    likes: 1,
+    comments: 1,
+    outlier: 1,
+    outlierLikes: 1,
+    outlierComments: 1
+  };
 
   // 333.33 reads as 333x; 2.47 reads as 2.5x. Decimals only matter near the
   // baseline, where the difference between 1.2x and 1.8x is the whole story.
@@ -86,7 +99,8 @@
 
   function buildGrid(posts, sortBy, ranked, median) {
     if (ranked === null || ranked === undefined) ranked = posts.length;
-    var isOutlier = sortBy === "outlier";
+    // Which metric the outlier score is measured on, or null for a plain sort.
+    var outlierOn = OUTLIER_FIELD[sortBy] || null;
 
     var wrap = document.createElement("div");
     wrap.id = "ig-sorter-wrap";
@@ -101,11 +115,12 @@
 
     var label = document.createElement("span");
     var rest = posts.length - ranked;
-    if (isOutlier) {
+    if (outlierOn) {
       // The median is the whole basis of the score, so state it rather than
       // leaving every badge as an unexplained multiplier.
       label.textContent =
-        ranked + " reels \u00b7 outlier score vs median " + fmt(Math.round(median)) + " views" +
+        ranked + (outlierOn === "views" ? " reels" : " posts") +
+        " \u00b7 outlier score vs median " + fmt(Math.round(median)) + " " + outlierOn +
         (rest > 0 ? " \u00b7 " + rest + " with none" : "");
     } else if (METRIC_SORTS[sortBy] && rest > 0) {
       // Say plainly that the tail isn't ranked, otherwise the numbered badges
@@ -167,12 +182,14 @@
         "font:700 11px/1 ui-monospace,SFMono-Regular,Menlo,monospace;";
       tile.appendChild(rank);
 
-      // Only above the baseline. A 0.4x badge on a below-median reel is noise —
+      // Only above the baseline. A 0.4x badge on a below-median post is noise —
       // and at exactly 1x the score says nothing the median line doesn't.
-      if (isOutlier && p.outlierScore > 1) {
+      if (outlierOn && p.outlierScore > 1) {
         var score = document.createElement("div");
         score.textContent = fmtScore(p.outlierScore);
-        score.title = fmt(p.views) + " views vs median " + fmt(Math.round(median));
+        score.title =
+          fmt(p[outlierOn]) + " " + outlierOn +
+          " vs median " + fmt(Math.round(median));
         score.style.cssText =
           "position:absolute;top:6px;right:6px;height:20px;display:flex;" +
           "align-items:center;padding:0 7px;border-radius:6px;" +

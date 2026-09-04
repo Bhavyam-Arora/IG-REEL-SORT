@@ -13,8 +13,22 @@ function working(on) {
   $("go").disabled = !!on;
 }
 
-// Outlier score is derived from views, so it carries the same reels-only caveat.
-var VIEW_BASED = { views: 1, outlier: 1 };
+// Which metric each sort ranks on. The views-based ones carry the reels-only
+// caveat; the likes and comments outliers work on any post.
+var SORT_FIELD = {
+  views: "views",
+  outlier: "views",
+  likes: "likes",
+  outlierLikes: "likes",
+  comments: "comments",
+  outlierComments: "comments"
+};
+
+var IS_OUTLIER = { outlier: 1, outlierLikes: 1, outlierComments: 1 };
+
+function isViewBased(sortBy) {
+  return SORT_FIELD[sortBy] === "views";
+}
 
 function fmtNum(n) {
   if (n === null || n === undefined) return "—";
@@ -62,7 +76,7 @@ $("go").addEventListener("click", function () {
       return;
     }
     var sortBy = $("sortBy").value;
-    if (VIEW_BASED[sortBy] && tab.url.indexOf("/reels") === -1) {
+    if (isViewBased(sortBy) && tab.url.indexOf("/reels") === -1) {
       setStatus("Tip: views only exist on the Reels tab. Sorting anyway.", null);
     } else {
       setStatus("Reloading and collecting\u2026");
@@ -71,9 +85,14 @@ $("go").addEventListener("click", function () {
     $("csv").disabled = true;
     $("json").disabled = true;
 
+    // "all" travels as a string; the collector turns it into an open-ended run
+    // that stops when the profile runs out of posts.
+    var limitRaw = $("limit").value;
+    var limit = limitRaw === "all" ? "all" : parseInt(limitRaw, 10);
+
     send(
       tab.id,
-      { type: "startSort", sortBy: sortBy, limit: parseInt($("limit").value, 10) },
+      { type: "startSort", sortBy: sortBy, limit: limit },
       function (res, err) {
         if (err) {
           working(false);
@@ -87,7 +106,11 @@ $("go").addEventListener("click", function () {
 chrome.runtime.onMessage.addListener(function (msg) {
   if (msg.type === "sortProgress") {
     working(true);
-    setStatus("Collected " + msg.collected + " of " + msg.target + "\u2026");
+    // An "all posts" run has no target to count towards.
+    setStatus(
+      "Collected " + msg.collected +
+      (msg.target ? " of " + msg.target : "") + "\u2026"
+    );
   }
   if (msg.type === "sortDone") {
     working(false);
@@ -101,12 +124,12 @@ chrome.runtime.onMessage.addListener(function (msg) {
     }
     var note = "";
     var rest = msg.count - msg.ranked;
-    var metric = VIEW_BASED[msg.sortBy] ? "views" : msg.sortBy;
+    var metric = SORT_FIELD[msg.sortBy] || msg.sortBy;
     if (typeof msg.ranked === "number" && rest > 0) {
       note = " " + msg.ranked + " have " + metric + ", " + rest + " don't.";
     }
-    if (msg.sortBy === "outlier" && msg.median) {
-      note += " Median " + fmtNum(Math.round(msg.median)) + " views.";
+    if (IS_OUTLIER[msg.sortBy] && msg.median) {
+      note += " Median " + fmtNum(Math.round(msg.median)) + " " + metric + ".";
     }
     if (msg.target && msg.count < msg.target) {
       // Short of the requested depth means the profile ran out of posts, not

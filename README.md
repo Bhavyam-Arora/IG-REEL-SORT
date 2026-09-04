@@ -1,19 +1,32 @@
 # Grid Sorter for Instagram
 
-Sorts an Instagram profile's posts or reels by views, likes, comments, date, or
+Sorts an Instagram profile's posts or reels by views, likes, comments, or
 outlier score, and exports the data to CSV/JSON. Everything runs locally in the
 browser.
 
 ## Outlier score
 
-Ranks reels by views, then labels each one with how far it beat the profile's
-own typical reel: `views ÷ median views` across the reels in the run. A profile
+Ranks posts by a metric, then labels each one with how far it beat the profile's
+own typical post: `metric ÷ median metric` across the posts in the run. A profile
 whose median reel does 7.5K views gets a `333x` badge on the reel that did 2.5M.
 
-The median is taken over the reels in the result set that actually have views —
-posts with none would pull the baseline toward zero. Badges only appear above
-`1x`; below-median reels are left unlabelled. The score is included in CSV/JSON
-exports as `outlierScore`.
+Three variants, one per metric:
+
+| Sort | Baseline | Applies to |
+|---|---|---|
+| Outlier score · views | median views | reels only |
+| Outlier score · likes | median likes | any post |
+| Outlier score · comments | median comments | any post |
+
+The median is taken over the posts in the result set that actually carry the
+metric — posts with none would pull the baseline toward zero. Badges only appear
+above `1x`; below-median posts are left unlabelled. The score is included in
+CSV/JSON exports as `outlierScore`.
+
+## Depth
+
+25, 50, 100, 200, 300, or **All posts**. An all-posts run has no count to stop
+at, so it scrolls until Instagram reports no next page or the feed stalls.
 
 ## How it works
 

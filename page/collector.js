@@ -66,17 +66,27 @@
     });
   }
 
-  var METRICS = { views: 1, likes: 1, comments: 1, outlier: 1 };
-
-  // Outlier score is views measured against the profile's own typical reel, so
-  // it ranks on exactly the same number as a views sort — only the labelling
-  // differs.
-  var METRIC_FIELD = {
-    views: "views",
-    likes: "likes",
-    comments: "comments",
-    outlier: "views"
+  // An outlier sort measures one metric against the profile's own typical post,
+  // so it ranks on exactly the same number as the plain sort of that metric —
+  // only the labelling and the badge differ.
+  var OUTLIER_FIELD = {
+    outlier: "views",
+    outlierLikes: "likes",
+    outlierComments: "comments"
   };
+
+  var METRICS = {
+    views: 1,
+    likes: 1,
+    comments: 1,
+    outlier: 1,
+    outlierLikes: 1,
+    outlierComments: 1
+  };
+
+  function metricField(sortBy) {
+    return OUTLIER_FIELD[sortBy] || sortBy;
+  }
 
   // Median, not mean: one 2.5M-view breakout would drag a mean up far enough to
   // flatten its own score. The median stays put and the outlier stands out.
@@ -108,7 +118,7 @@
     var filler = [];
 
     if (METRICS[sortBy]) {
-      var field = METRIC_FIELD[sortBy];
+      var field = metricField(sortBy);
       ranked = [];
       posts.forEach(function (p) {
         var v = p[field];
@@ -122,10 +132,6 @@
         return b[field] - a[field] || byNewest(a, b);
       });
       filler.sort(byNewest);
-    } else if (sortBy === "oldest") {
-      ranked = posts.slice().sort(function (a, b) {
-        return ts(a) - ts(b);
-      });
     } else {
       ranked = posts.slice().sort(byNewest);
     }
@@ -136,19 +142,21 @@
     var rankedCount = Math.min(ranked.length, out.length);
     var med = null;
 
-    if (sortBy === "outlier") {
+    var outlierOn = OUTLIER_FIELD[sortBy] || null;
+    if (outlierOn) {
       // The baseline is the set the user actually asked for — "top 50 by
-      // outlier score" means each reel measured against the median of those 50,
+      // outlier score" means each post measured against the median of those 50,
       // not against everything that happened to get scrolled past. Filler posts
-      // have no views and would drag the median toward zero, so they're out.
+      // have none of the metric and would drag the median toward zero, so
+      // they're out.
       med = median(
         out.slice(0, rankedCount).map(function (p) {
-          return p.views;
+          return p[outlierOn];
         })
       );
       out.forEach(function (p) {
-        p.outlierScore =
-          med && typeof p.views === "number" && p.views > 0 ? p.views / med : null;
+        var v = p[outlierOn];
+        p.outlierScore = med && typeof v === "number" && v > 0 ? v / med : null;
       });
     }
 
@@ -166,7 +174,12 @@
   }
 
   async function run(job) {
-    var target = job.limit || 100;
+    // "All posts" has no count to stop at, so collection ends the way it
+    // already does when a profile runs dry: hasNextPage going false, or the
+    // stall counter. reported is what the UI sees — Infinity is not JSON, and
+    // "of Infinity" would be a nonsense progress line anyway.
+    var target = job.limit === "all" ? Infinity : job.limit || 100;
+    var reported = isFinite(target) ? target : null;
     var maxScrolls = 400;
     var STALL_LIMIT = 14;
     var scrolls = 0;
@@ -175,7 +188,7 @@
     var lastHeight = 0;
     var owner = targetOwner();
 
-    post("progress", { collected: 0, target: target });
+    post("progress", { collected: 0, target: reported });
 
     while (scrolls < maxScrolls) {
       // Count only this profile's posts, so foreign ones can neither satisfy the
@@ -195,7 +208,7 @@
         stagnant++;
         if (stagnant >= STALL_LIMIT) break;
       } else {
-        if (count !== last) post("progress", { collected: count, target: target });
+        if (count !== last) post("progress", { collected: count, target: reported });
         stagnant = 0;
       }
       last = count;
@@ -228,7 +241,7 @@
       ranked: result.ranked,
       median: result.median,
       sortBy: job.sortBy,
-      target: target,
+      target: reported,
       total: all.length,
       hits: window.__IG_SORTER_HITS__ || 0
     });

@@ -20,21 +20,23 @@
       <span class="lbl">Rank by</span>
       <select id="sortBy">
         <option value="views">Views &middot; reels only</option>
-        <option value="outlier">Outlier score &middot; reels only</option>
+        <option value="outlier">Outlier score &middot; views &middot; reels only</option>
         <option value="likes">Likes</option>
+        <option value="outlierLikes">Outlier score &middot; likes</option>
         <option value="comments">Comments</option>
-        <option value="newest">Newest first</option>
-        <option value="oldest">Oldest first</option>
+        <option value="outlierComments">Outlier score &middot; comments</option>
       </select>
     </label>
 
     <label class="field">
       <span class="lbl">Depth</span>
       <select id="limit">
-        <option value="24">24 posts &middot; fast</option>
+        <option value="25">25 posts &middot; fast</option>
         <option value="50">50 posts</option>
         <option value="100" selected>100 posts</option>
+        <option value="200">200 posts</option>
         <option value="300">300 posts &middot; slow</option>
+        <option value="all">All posts &middot; slowest</option>
       </select>
     </label>
 
