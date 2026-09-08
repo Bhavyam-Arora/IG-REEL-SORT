@@ -102,19 +102,31 @@
   // scoped under .igs-tile so nothing can bleed into Instagram's own UI.
   var STYLE_ID = "ig-sorter-style";
   var CSS = [
-    ".igs-tile{position:relative;}",
+    // content-visibility lets the browser skip layout and paint for tiles that
+    // are scrolled out of view. An all-posts run puts hundreds of tiles in the
+    // DOM at once, and without this every one of them is painted on every
+    // frame. The intrinsic size keeps the scrollbar from jumping as skipped
+    // tiles are realised.
+    ".igs-tile{position:relative;content-visibility:auto;",
+    "contain-intrinsic-size:auto 220px;}",
 
     ".igs-tx{position:absolute;bottom:6px;right:6px;z-index:3;",
     "width:28px;height:28px;padding:0;margin:0;border:0;border-radius:8px;",
     "display:flex;align-items:center;justify-content:center;cursor:pointer;",
     "background:rgba(23,21,28,.7);color:#EFECF4;opacity:.5;",
-    "-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);",
     "transition:opacity .15s ease,background .15s ease,transform .12s ease;}",
 
     // Visible at rest so it can be discovered without hovering, but held back
     // far enough that 100 tiles don't read as 100 buttons.
+    //
+    // The blur lives ONLY here, on hover, and never on the resting button.
+    // backdrop-filter forces a compositing layer and re-samples what is behind
+    // it every frame; opacity:.5 does not switch that off. On the resting rule
+    // it meant one live blur per video tile, which is hundreds of them during
+    // an all-posts scroll. Scoped to :hover there is at most one.
     ".igs-tile:hover .igs-tx:not(.is-busy):not(.is-done):not(.is-error)",
-    "{opacity:1;background:rgba(23,21,28,.92);}",
+    "{opacity:1;background:rgba(23,21,28,.92);",
+    "-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);}",
     ".igs-tx:not(.is-busy):not(.is-done):not(.is-error):hover",
     "{opacity:1;background:#E8A33D;color:#17151C;transform:scale(1.09);}",
 
