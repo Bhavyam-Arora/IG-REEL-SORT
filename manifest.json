@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Grid Sorter for Instagram",
+  "name": "Sortcut",
   "version": "0.1.0",
-  "description": "Sort any Instagram profile's posts and reels by views, likes, comments, or date. Everything runs locally in your browser.",
+  "description": "Sort any Instagram profile's posts and reels by views, likes, comments, or date. Find outliers and export to CSV.",
   "permissions": ["storage", "activeTab"],
   "host_permissions": [
     "https://www.instagram.com/*",
