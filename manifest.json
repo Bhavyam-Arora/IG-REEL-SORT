@@ -1,6 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Sortcut",
+  "key":"MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuKIqMB91AS0GiHgnYnnOr3qFafJpbkbQlBnijPxHGrPDMy/bxL4CZgrwJ33MBdVm/fwMvMVuu5J6tRP6mN3WQpEStvtaQQmGZyhjUMV4RiC/Kqi/ZLo97lqNLG+BV5YKtlB1i4fHsM406I6YQh6mXlAgWkgQNZFggyfZC0Y/wqt2G6PQpy6k3RSUDx69jF/k0elbaQp5QjvikeUSuNYdiGFPWQZYss5w0imIftOOjVN6ioAfIx5APpLEXM8YbyoUcOrnfGhatK2h78q7u/bd2oW31ujm3RxzVFSdQNxtqgokGEUJ1RoSUmwT3S2vrza92NwWnJH8iSSafnW/8ah7OQIDAQAB",
   "version": "0.1.0",
   "description": "Sort any Instagram profile's posts and reels by views, likes, comments, or date. Find outliers and export to CSV.",
   "permissions": ["storage", "activeTab"],
