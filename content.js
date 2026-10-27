@@ -184,6 +184,10 @@
 
   var IDLE_LABEL = "Transcribe this reel and download it as .txt";
 
+  // Status lines the worker sends while a job waits on the server ("Waiting
+  // in queue…"), keyed by reel code so each reaches the tile that asked.
+  var TX_PROGRESS = {};
+
   // A tile is an <a> to the post, so anything placed inside it has to stop its
   // own clicks from navigating away mid-transcription.
   function buildTranscribeButton(p) {
@@ -211,8 +215,14 @@
 
       btn.disabled = true;
       state("busy", "Transcribing…");
+      // Label only: re-running state() would restart the spinner each time.
+      TX_PROGRESS[p.code] = function (label) {
+        btn.title = label;
+        btn.setAttribute("aria-label", label);
+      };
 
       var settle = function (name, label) {
+        delete TX_PROGRESS[p.code];
         btn.disabled = false;
         state(name, label);
         // Return to idle so it can be run again — an expired link and a rate
@@ -555,6 +565,12 @@
   // 6. Messages from the popup
   // ---------------------------------------------------------------
   chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+    if (msg.type === "transcribeProgress") {
+      var setLabel = TX_PROGRESS[msg.code];
+      if (setLabel) setLabel(msg.label);
+      return false;
+    }
+
     if (msg.type === "startSort") {
       try {
         sessionStorage.setItem(

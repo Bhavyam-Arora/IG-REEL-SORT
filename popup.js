@@ -156,6 +156,8 @@ chrome.runtime.onMessage.addListener(function (msg) {
   }
   if (msg.type === "transcribeDone") {
     setStatus("Transcript saved (" + (msg.language || "unknown") + ").", "good");
+    // One more credit used.
+    accountCall("account");
   }
 });
 
@@ -174,22 +176,85 @@ function doExport(kind) {
 $("csv").addEventListener("click", function () { doExport("csv"); });
 $("json").addEventListener("click", function () { doExport("json"); });
 
-// ---- Groq key ----
-// Saved on every keystroke rather than behind a Save button: there is one
-// field, and a key that silently didn't persist is the worst outcome here.
-chrome.storage.local.get({ groqKey: "" }, function (o) {
-  $("groqKey").value = o.groqKey || "";
+// ---- Account ----
+// Left over from bring-your-own-key: transcription now runs on Sortcut's key,
+// server side, so a stored one is just a secret sitting in storage.
+chrome.storage.local.remove("groqKey");
+
+var PLAN_LABEL = { none: "Free", pro_monthly: "Pro Monthly", pro_yearly: "Pro Yearly" };
+
+// periodEnd is UTC midnight; read in local time it can show as the day before.
+function fmtDate(iso) {
+  var d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  return d.toLocaleDateString(undefined, {
+    day: "numeric", month: "short", year: "numeric", timeZone: "UTC"
+  });
+}
+
+function accountNote(text) {
+  $("accountNote").textContent = text || "";
+  $("accountNote").hidden = !text;
+}
+
+function renderAccount(a) {
+  var signedIn = !!(a && a.signedIn);
+  $("signedOut").hidden = signedIn;
+  $("signedIn").hidden = !signedIn;
+  accountNote(a && a.error);
+  if (!signedIn) return;
+
+  var me = a.me || {};
+  var pro = me.plan === "pro_monthly" || me.plan === "pro_yearly";
+  $("email").textContent = me.email || "";
+  $("plan").textContent = a.me ? PLAN_LABEL[me.plan] || "Free" : "";
+  $("upgrade").hidden = !a.me || pro;
+
+  var q = me.quota;
+  var usage = "";
+  if (pro && q) {
+    var resets = fmtDate(q.periodEnd || me.periodEnd);
+    usage = q.used + " of " + q.limit + " transcripts used" + (resets ? " \u00b7 resets " + resets : "");
+  }
+  $("usage").textContent = usage;
+  $("usage").hidden = !usage;
+}
+
+// The worker owns sign-in and every backend call; the popup only asks it.
+function accountCall(type) {
+  chrome.runtime.sendMessage({ type: type }, function (res) {
+    $("signIn").disabled = false;
+    $("signIn").textContent = "Sign in with Google";
+    $("signOut").disabled = false;
+    if (chrome.runtime.lastError || !res) {
+      accountNote("Extension worker unavailable \u2014 reload the extension.");
+      return;
+    }
+    if (!res.ok) {
+      accountNote(res.error);
+      return;
+    }
+    renderAccount(res.account);
+  });
+}
+
+accountCall("account");
+
+$("signIn").addEventListener("click", function () {
+  $("signIn").disabled = true;
+  $("signIn").textContent = "Signing in\u2026";
+  accountNote("");
+  accountCall("signIn");
 });
 
-var keySaveTimer = null;
-$("groqKey").addEventListener("input", function () {
-  var val = $("groqKey").value.trim();
-  clearTimeout(keySaveTimer);
-  keySaveTimer = setTimeout(function () {
-    chrome.storage.local.set({ groqKey: val }, function () {
-      $("keyStatus").textContent = val ? "Key saved." : "Key cleared.";
-    });
-  }, 400);
+$("signOut").addEventListener("click", function () {
+  $("signOut").disabled = true;
+  accountCall("signOut");
+});
+
+// Sign-in started from a tile, or a session that ended, while the popup is open.
+chrome.storage.onChanged.addListener(function (changes, area) {
+  if (area === "local" && changes.auth) accountCall("account");
 });
 
 $("restore").addEventListener("click", function () {

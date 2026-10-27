@@ -1,8 +1,8 @@
 # Grid Sorter for Instagram
 
 Sorts an Instagram profile's posts or reels by views, likes, comments, or
-outlier score, and exports the data to CSV/JSON. Everything runs locally in the
-browser.
+outlier score, and exports the data to CSV/JSON. Sorting runs locally in the
+browser; transcription (Pro) runs through Sortcut.
 
 ## Outlier score
 
@@ -38,19 +38,23 @@ Hindi comes back as **Hinglish** — Latin script, the way people actually type
 it — with the original Devanagari kept at the bottom of the file. English reels
 come back as-is. Language is detected automatically; you don't pick one.
 
-Set up: paste a [Groq](https://console.groq.com/keys) API key into
-**Transcription** in the popup. The free tier covers roughly 2,000 clips a day;
-paid is about $0.04 per hour of audio, so a 30-second reel costs well under a
-hundredth of a cent.
+Transcription is a **Sortcut Pro** feature and runs through Sortcut. Sign in
+with Google under **Account** in the popup, or just click Transcribe: the
+sign-in window opens on first use. Sign-in asks Google only for your name and
+email address. The popup then shows your plan and, on Pro, how many transcripts
+you've used and when they reset (200 a month on Pro Monthly, 3,000 a year on Pro
+Yearly). Free accounts can sort and export but not transcribe; plans are at
+[sortcut.co/pricing](https://sortcut.co/pricing.html). A reel you've recently
+transcribed comes back instantly without using another transcript.
 
 Two things to know:
 
 - **Stay logged in.** Instagram's grid responses carry thumbnails and counts but
   no playable video, so the file is looked up per-post when you click, using
   your existing session. Logged out, the lookup is refused.
-- **This is the one feature that leaves your machine.** The audio goes to Groq
-  to be transcribed. Everything else — sorting, scoring, exporting — is still
-  entirely local.
+- **This is the one feature that leaves your machine.** Reels you transcribe
+  are sent to Sortcut and Groq to be transcribed, and deleted after processing.
+  Everything else — sorting, scoring, exporting — is still entirely local.
 
 ## How it works
 
@@ -77,7 +81,9 @@ After any code change, click the reload arrow on the extension card.
 |---|---|---|
 | `manifest.json` | — | Permissions and wiring |
 | `content.js` | isolated | Injects page scripts, renders grid, exports |
-| `background.js` | worker | Transcription: CDN fetch + Groq calls |
+| `background.js` | worker | Instagram video lookup + download, Sortcut API calls for transcription |
+| `lib/config.js` | worker | Environment settings |
+| `lib/auth.js` | worker | Google sign-in, tokens, API helper |
 | `lib/extract.js` | page | Shape-based post extraction |
 | `page/interceptor.js` | page | XHR + fetch response hooks |
 | `page/collector.js` | page | Scroll loop, sort, handoff |
@@ -93,8 +99,9 @@ After any code change, click the reload arrow on the extension card.
    signed CDN URL that returns.
 2. Trigger loading only by scrolling. Keep the 900ms delay.
 3. Match data by shape, not by name.
-4. Nothing leaves the browser except audio the user explicitly sends to be
-   transcribed. No analytics, no telemetry, no server of our own — ever.
+4. Sorting and exports never touch any server — they run entirely in the
+   browser. Only transcription goes through Sortcut's server, which holds the
+   one Groq key and checks your plan.
 5. Read-only. Never like, follow, comment, or post.
 
 ## Not affiliated with or endorsed by Instagram or Meta.

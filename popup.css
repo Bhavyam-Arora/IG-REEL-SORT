@@ -166,8 +166,60 @@ button { font-family: var(--sans); cursor: pointer; }
 }
 .link:hover { color: var(--text); }
 
+/* ---- account ---- */
+.account {
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+/* .link and .ghost set display, which would otherwise beat [hidden]. */
+.account [hidden] { display: none; }
+.account .ghost { width: 100%; }
+.account p {
+  margin: 6px 0 0;
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+.who {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11.5px;
+}
+.who .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plan {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--signal);
+}
+.upgrade {
+  display: block;
+  margin-top: 9px;
+  padding: 8px;
+  border: 1px solid rgba(232,163,61,.42);
+  border-radius: 8px;
+  color: var(--signal);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  text-decoration: none;
+}
+.upgrade:hover { background: var(--surface); }
+.upgrade:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+}
+
 /* ---- transcription drawer ----
-   Collapsed by default: the key is set once, but the sort controls are used
+   Collapsed by default: it is a note read once, and the sort controls are used
    every session and shouldn't be pushed down the panel for it. */
 .tools {
   margin-top: 12px;
@@ -194,26 +246,10 @@ button { font-family: var(--sans); cursor: pointer; }
   outline: 2px solid var(--signal);
   outline-offset: 2px;
 }
-.tools .field { margin-top: 10px; }
 .tools p {
   margin: 0 0 4px;
   font-size: 10.5px;
   line-height: 1.5;
-}
-
-input[type="password"] {
-  width: 100%;
-  padding: 9px 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--text);
-  font-family: var(--mono);
-  font-size: 12px;
-}
-input[type="password"]:focus-visible {
-  outline: 2px solid var(--signal);
-  outline-offset: 2px;
 }
 
 .dim { color: #6E6880; }

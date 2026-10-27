@@ -10,7 +10,7 @@
       <i></i><i></i><i></i>
     </div>
     <div class="titles">
-      <h1>Grid Sorter</h1>
+      <h1>Sortcut</h1>
       <p class="sub">Instagram research</p>
     </div>
   </header>
@@ -51,18 +51,28 @@
 
     <button id="restore" class="link" hidden>Restore original grid</button>
 
+    <section class="account" aria-label="Account">
+      <span class="lbl">Account</span>
+      <div id="signedOut" hidden>
+        <button id="signIn" class="ghost">Sign in with Google</button>
+      </div>
+      <div id="signedIn" hidden>
+        <div class="who">
+          <span id="email" class="mono"></span>
+          <span id="plan" class="plan"></span>
+        </div>
+        <p id="usage" class="dim" hidden></p>
+        <a id="upgrade" class="upgrade" href="https://sortcut.co/pricing.html" target="_blank" rel="noopener" hidden>Upgrade to Pro</a>
+        <button id="signOut" class="link">Sign out</button>
+      </div>
+      <p id="accountNote" class="dim" role="status" hidden></p>
+    </section>
+
     <details class="tools">
       <summary>Transcription</summary>
-      <label class="field">
-        <span class="lbl">Groq API key</span>
-        <input id="groqKey" type="password" placeholder="gsk_…" autocomplete="off" spellcheck="false" />
-      </label>
-      <div id="keyStatus" class="status dim" role="status">
-        Stored locally. Needed for the Transcribe button on video tiles.
-      </div>
       <p class="dim">
-        Free key at <span class="mono">console.groq.com/keys</span>. Audio is sent
-        to Groq to be transcribed; nothing else leaves your browser.
+        Reels you transcribe are sent to Sortcut and Groq to be transcribed, and
+        deleted after processing.
       </p>
     </details>
   </main>
