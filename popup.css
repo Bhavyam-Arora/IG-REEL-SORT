@@ -165,6 +165,7 @@ button { font-family: var(--sans); cursor: pointer; }
   text-decoration: underline;
 }
 .link:hover { color: var(--text); }
+.link[hidden] { display: none; }
 
 /* ---- account ---- */
 .account {

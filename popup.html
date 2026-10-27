@@ -19,8 +19,8 @@
     <label class="field">
       <span class="lbl">Rank by</span>
       <select id="sortBy">
-        <option value="views">Views &middot; reels only</option>
-        <option value="outlier">Outlier score &middot; views &middot; reels only</option>
+        <option value="views">Views</option>
+        <option value="outlier">Outlier score &middot; views</option>
         <option value="likes">Likes</option>
         <option value="outlierLikes">Outlier score &middot; likes</option>
         <option value="comments">Comments</option>
@@ -31,18 +31,20 @@
     <label class="field">
       <span class="lbl">Depth</span>
       <select id="limit">
-        <option value="25">25 posts &middot; fast</option>
-        <option value="50">50 posts</option>
-        <option value="100" selected>100 posts</option>
-        <option value="200">200 posts</option>
-        <option value="300">300 posts &middot; slow</option>
-        <option value="all">All posts &middot; slowest</option>
+        <option value="25">25 reels &middot; fast</option>
+        <option value="50">50 reels</option>
+        <option value="100" selected>100 reels</option>
+        <option value="200">200 reels</option>
+        <option value="300">300 reels &middot; slow</option>
+        <option value="all">All reels &middot; slowest</option>
       </select>
     </label>
 
-    <button id="go" class="primary">Sort this profile</button>
+    <button id="go" class="primary">Sort reels</button>
 
-    <div id="status" class="status" role="status">Open a profile, then sort.</div>
+    <div id="pageNote" class="status bad" role="alert" hidden></div>
+    <div id="status" class="status" role="status" hidden></div>
+    <div id="txStatus" class="status" role="status" hidden></div>
 
     <div class="exports">
       <button id="csv" class="ghost" disabled>Export CSV</button>
@@ -68,6 +70,9 @@
       <p id="accountNote" class="dim" role="status" hidden></p>
     </section>
 
+    <!-- Developer capture: shown only when storage has devCapture: true. See README. -->
+    <button id="debugSample" class="ghost" hidden>Save debug sample</button>
+
     <details class="tools">
       <summary>Transcription</summary>
       <p class="dim">
@@ -82,6 +87,8 @@
     <p class="dim">Not affiliated with or endorsed by Instagram.</p>
   </footer>
 
+  <!-- For the shared reels-tab URL check; the extractor itself goes unused here. -->
+  <script src="lib/extract.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

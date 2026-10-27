@@ -28,41 +28,13 @@
     window.postMessage(msg, "*");
   }
 
-  // Instagram prefetches your home timeline and the suggested-reels rails while
-  // you sit on someone's profile, and those responses come down the very same
-  // endpoints the interceptor listens to. Without an owner check their posts end
-  // up mixed into the profile's grid.
-  var NON_PROFILE_SEGMENTS = {
-    p: 1,
-    reel: 1,
-    reels: 1,
-    explore: 1,
-    stories: 1,
-    direct: 1,
-    accounts: 1,
-    challenge: 1,
-    your_activity: 1
-  };
-
-  function targetOwner() {
-    var seg = location.pathname.replace(/^\/+|\/+$/g, "").split("/")[0];
-    if (!seg || NON_PROFILE_SEGMENTS[seg.toLowerCase()]) return null;
-    return seg.toLowerCase();
-  }
-
-  // Deliberately asymmetric: a post with no owner attached is kept, because
-  // profile-grid payloads routinely omit the author. Only posts we can
-  // positively attribute to someone else get dropped.
-  function ownedByTarget(p, owner) {
-    if (!owner || !p.owner) return true;
-    return String(p.owner).toLowerCase() === owner;
-  }
-
+  // The interceptor only buffers the target's reels, but the buffer outlives
+  // in-page navigation, so the owner check is repeated against the reels tab
+  // the job was started on.
   function collected(owner) {
-    var buf = window.__IG_SORTER_BUFFER__ || [];
-    if (!owner) return buf.slice();
-    return buf.filter(function (p) {
-      return ownedByTarget(p, owner);
+    var lib = window.__IG_SORTER_REELS__;
+    return (window.__IG_SORTER_BUFFER__ || []).filter(function (p) {
+      return lib.isTargetReel(p, owner);
     });
   }
 
@@ -109,7 +81,7 @@
   }
 
   // Ranking a metric splits the profile in two, and both halves matter.
-  // "Top 50 by comments" on a profile where only 20 posts were ever commented
+  // "Top 50 by comments" on a profile where only 20 reels were ever commented
   // on should still hand back 50 tiles: the 20 that rank, then the rest as
   // filler. Truncating to the ones that happen to carry the metric silently
   // gives back a shorter grid than was asked for.
@@ -122,9 +94,9 @@
       ranked = [];
       posts.forEach(function (p) {
         var v = p[field];
-        // null means the payload never carried the metric (image posts have no
-        // view count); 0 means it carried it and the post has none. Neither can
-        // be ranked, so both become filler.
+        // null means the payload never carried the metric (Instagram hides
+        // counts on some reels); 0 means it carried it and the reel has none.
+        // Neither can be ranked, so both become filler.
         if (typeof v === "number" && isFinite(v) && v > 0) ranked.push(p);
         else filler.push(p);
       });
@@ -173,49 +145,99 @@
     });
   }
 
+  // Stop rules. Collection must always end on its own, whatever Instagram
+  // does, and always hand back whatever it has by then.
+  //  - NO_REELS: responses keep arriving but none hold this profile's reels.
+  //    Instagram has changed something; scrolling longer won't help.
+  //  - STALL: reels were arriving and then stopped.
+  //  - TIME_LIMIT: a backstop for everything else, e.g. nothing arriving at all.
+  var NO_REELS_SCROLLS = 10;
+  var STALL_SCROLLS = 25;
+  var TIME_LIMIT_MS = 3 * 60 * 1000;
+  var TIME_LIMIT_ALL_MS = 10 * 60 * 1000;
+
   async function run(job) {
-    // "All posts" has no count to stop at, so collection ends the way it
-    // already does when a profile runs dry: hasNextPage going false, or the
-    // stall counter. reported is what the UI sees — Infinity is not JSON, and
-    // "of Infinity" would be a nonsense progress line anyway.
+    var lib = window.__IG_SORTER_REELS__;
+    var owner = lib ? lib.reelsTabOwner(location.href) : null;
+
+    // "All reels" has no count to stop at, so collection ends when the profile
+    // runs out (hasNextPage false) or a stop rule fires. reported is what the
+    // UI sees — Infinity is not JSON, and "of Infinity" would be a nonsense
+    // progress line anyway.
     var target = job.limit === "all" ? Infinity : job.limit || 100;
     var reported = isFinite(target) ? target : null;
-    var maxScrolls = 400;
-    var STALL_LIMIT = 14;
-    var scrolls = 0;
-    var stagnant = 0;
+    var limitMs = isFinite(target) ? TIME_LIMIT_MS : TIME_LIMIT_ALL_MS;
+    var started = Date.now();
+    var reason = null;
+
+    // The popup only starts a job on a Reels tab, so this is a backstop: never
+    // scroll anything else.
+    if (!owner) {
+      clearJob();
+      post("result", {
+        posts: [], ranked: 0, median: null, sortBy: job.sortBy, target: reported,
+        total: 0, hits: 0, unreadable: 0, reason: "wrong_page", limitMs: limitMs, elapsedMs: 0
+      });
+      return;
+    }
+
     var last = 0;
-    var lastHeight = 0;
-    var owner = targetOwner();
+    var stagnant = 0;
+    var emptyScrolls = 0;
+    var responsesSeen = window.__IG_SORTER_RESPONSES__ || 0;
 
-    post("progress", { collected: 0, target: reported });
+    for (;;) {
+      // Leaving the tab mid-run would have us scrolling some other page.
+      if (lib.reelsTabOwner(location.href) !== owner) {
+        reason = "navigated";
+        break;
+      }
 
-    while (scrolls < maxScrolls) {
-      // Count only this profile's posts, so foreign ones can neither satisfy the
-      // target early nor keep resetting the stall counter.
       var count = collected(owner).length;
+      if (count >= target) {
+        reason = "complete";
+        break;
+      }
+      if (count > 0 && window.__IG_SORTER_PAGEINFO__.hasNextPage === false) {
+        reason = "end";
+        break;
+      }
+      if (Date.now() - started >= limitMs) {
+        reason = "timeout";
+        break;
+      }
 
-      if (count >= target) break;
-      if (window.__IG_SORTER_PAGEINFO__.hasNextPage === false && count > 0) break;
-
-      // Stall detection. Posts arriving is the strong signal, but the page
-      // growing taller means Instagram is still feeding us and the next batch
-      // just hasn't landed — so a stall only counts when neither moved. Giving
-      // up on the count alone cuts collection short on slow responses and is
-      // what leaves the grid short of the requested depth.
-      var height = document.body.scrollHeight;
-      if (count === last && height === lastHeight) {
-        stagnant++;
-        if (stagnant >= STALL_LIMIT) break;
+      if (count === 0) {
+        // Only scrolls during which Instagram actually answered count here; a
+        // slow first load is the time limit's business.
+        var responses = window.__IG_SORTER_RESPONSES__ || 0;
+        if (responses > responsesSeen) emptyScrolls++;
+        responsesSeen = responses;
+        if (emptyScrolls >= NO_REELS_SCROLLS) {
+          reason = "no_reels";
+          break;
+        }
+      } else if (count === last) {
+        if (++stagnant >= STALL_SCROLLS) {
+          reason = "stalled";
+          break;
+        }
       } else {
-        if (count !== last) post("progress", { collected: count, target: reported });
         stagnant = 0;
       }
       last = count;
-      lastHeight = height;
+
+      // Sent every scroll, not just when the count moves: it doubles as the
+      // heartbeat that tells the popup this run is still alive.
+      post("progress", {
+        collected: count,
+        target: reported,
+        sortBy: job.sortBy,
+        elapsedMs: Date.now() - started,
+        limitMs: limitMs
+      });
 
       window.scrollTo(0, document.body.scrollHeight);
-      scrolls++;
 
       // Human-ish pacing. Do not lower below 600ms — aggressive scrolling is
       // what triggers rate limiting.
@@ -225,13 +247,15 @@
     var all = collected(owner);
     var result = rankPosts(all, job.sortBy, target);
 
-    window.scrollTo(0, 0);
+    if (reason !== "navigated") window.scrollTo(0, 0);
 
     if (all.length === 0) {
       post("healthAlert", {
         reason: "zero_posts_captured",
+        stop: reason,
         path: location.pathname,
         hits: window.__IG_SORTER_HITS__ || 0,
+        responses: window.__IG_SORTER_RESPONSES__ || 0,
         ts: new Date().toISOString()
       });
     }
@@ -243,7 +267,11 @@
       sortBy: job.sortBy,
       target: reported,
       total: all.length,
-      hits: window.__IG_SORTER_HITS__ || 0
+      hits: window.__IG_SORTER_HITS__ || 0,
+      unreadable: window.__IG_SORTER_UNREADABLE__ || 0,
+      reason: reason,
+      limitMs: limitMs,
+      elapsedMs: Date.now() - started
     });
     clearJob();
   }

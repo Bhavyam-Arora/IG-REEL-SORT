@@ -1,0 +1,8 @@
+# Real Instagram debug samples. They hold real accounts' data and must never be
+# committed; tests that use them skip when they're absent. Commit synthetic
+# fixtures (tests/fixtures/synthetic-*.json) instead.
+tests/fixtures/reels-tab-api-graphql-2026-10.json
+tests/fixtures/profile-grid-api-graphql-2026-10.json
+tests/fixtures/*-api-graphql-*.json
+# Files the "Save debug sample" button downloads, if one lands in the repo.
+*-debug-sample-*.json

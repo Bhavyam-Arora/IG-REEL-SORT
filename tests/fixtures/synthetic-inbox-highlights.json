@@ -1,0 +1,39 @@
+{
+  "_fixture": "SYNTHETIC. Non-reels-tab traffic seen on /demo.creator/reels/: a DM inbox page with a reel shared by friend.account, a highlights tray, and a suggested-reels rail of other accounts. Each has a list with has_next_page false. None hold demo.creator's reels, so they must yield 0 and leave hasNextPage alone. All made up.",
+  "page": "/demo.creator/reels/",
+  "capturedAt": "2026-10-01T00:00:00.000Z",
+  "userAgent": "SYNTHETIC",
+  "extensionVersion": "synthetic",
+  "graphqlBodies": [
+    {
+      "t": "2026-10-01T00:00:00.000Z",
+      "via": "xhr",
+      "url": "/api/graphql",
+      "status": 200,
+      "contentType": "text/javascript; charset=utf-8",
+      "length": 995,
+      "truncated": false,
+      "body": "{\"data\":{\"xdt_get_inbox_threads\":{\"threads\":{\"edges\":[{\"node\":{\"thread_id\":\"SYNTHETIC_THREAD_1\",\"thread_title\":\"friend.account\",\"items\":{\"edges\":[{\"node\":{\"item_type\":\"clip\",\"clip\":{\"clip\":{\"pk\":\"3980192987199045650\",\"id\":\"3980192987199045650_9000000003\",\"code\":\"SYNdmshare1\",\"product_type\":\"clips\",\"play_count\":2011234,\"view_count\":null,\"like_and_view_counts_disabled\":false,\"comment_count\":2010,\"like_count\":100507,\"media_type\":2,\"original_height\":1920,\"original_width\":1080,\"user\":{\"pk\":\"9000000003\",\"id\":\"9000000003\",\"username\":\"friend.account\",\"full_name\":\"Synthetic friend.account\",\"profile_pic_url\":\"https://cdn.example.invalid/synthetic/avatar.jpg\",\"is_verified\":false,\"is_private\":false,\"__typename\":\"XDTUserDict\"},\"coauthor_producers\":[],\"image_versions2\":{\"candidates\":[{\"url\":\"https://cdn.example.invalid/synthetic/201.jpg\",\"width\":640,\"height\":1136}]},\"caption\":null}}}}]}}}],\"page_info\":{\"has_next_page\":false,\"end_cursor\":null}},\"has_older\":false}},\"extensions\":{\"is_final\":true}}"
+    },
+    {
+      "t": "2026-10-01T00:00:01.000Z",
+      "via": "xhr",
+      "url": "/api/graphql",
+      "status": 200,
+      "contentType": "text/javascript; charset=utf-8",
+      "length": 918,
+      "truncated": false,
+      "body": "{\"data\":{\"highlights\":{\"edges\":[{\"node\":{\"id\":\"highlight:9000000101\",\"title\":\"Behind the scenes\",\"user\":{\"pk\":\"9000000001\",\"id\":\"9000000001\",\"username\":\"demo.creator\",\"full_name\":\"Synthetic demo.creator\",\"profile_pic_url\":\"https://cdn.example.invalid/synthetic/avatar.jpg\",\"is_verified\":false,\"is_private\":false,\"__typename\":\"XDTUserDict\"},\"cover_media\":{\"cropped_image_version\":{\"url\":\"https://cdn.example.invalid/synthetic/hl1.jpg\"}}}},{\"node\":{\"id\":\"highlight:9000000102\",\"title\":\"Q&A\",\"user\":{\"pk\":\"9000000001\",\"id\":\"9000000001\",\"username\":\"demo.creator\",\"full_name\":\"Synthetic demo.creator\",\"profile_pic_url\":\"https://cdn.example.invalid/synthetic/avatar.jpg\",\"is_verified\":false,\"is_private\":false,\"__typename\":\"XDTUserDict\"},\"cover_media\":{\"cropped_image_version\":{\"url\":\"https://cdn.example.invalid/synthetic/hl2.jpg\"}}}}],\"page_info\":{\"has_next_page\":false,\"end_cursor\":null}}},\"extensions\":{\"is_final\":true}}"
+    },
+    {
+      "t": "2026-10-01T00:00:02.000Z",
+      "via": "xhr",
+      "url": "/api/graphql",
+      "status": 200,
+      "contentType": "text/javascript; charset=utf-8",
+      "length": 1625,
+      "truncated": false,
+      "body": "{\"data\":{\"xdt_api__v1__clips__home__connection_v2\":{\"edges\":[{\"node\":{\"media\":{\"pk\":\"3980917762930245651\",\"id\":\"3980917762930245651_9000000004\",\"code\":\"SYNreel0202\",\"product_type\":\"clips\",\"play_count\":2021234,\"view_count\":null,\"like_and_view_counts_disabled\":false,\"comment_count\":2020,\"like_count\":101007,\"media_type\":2,\"original_height\":1920,\"original_width\":1080,\"user\":{\"pk\":\"9000000004\",\"id\":\"9000000004\",\"username\":\"random.page\",\"full_name\":\"Synthetic random.page\",\"profile_pic_url\":\"https://cdn.example.invalid/synthetic/avatar.jpg\",\"is_verified\":false,\"is_private\":false,\"__typename\":\"XDTUserDict\"},\"coauthor_producers\":[],\"image_versions2\":{\"candidates\":[{\"url\":\"https://cdn.example.invalid/synthetic/202.jpg\",\"width\":640,\"height\":1136}]},\"caption\":null},\"__typename\":\"XDTClipsItemDict\"}},{\"node\":{\"media\":{\"pk\":\"3981642538661445652\",\"id\":\"3981642538661445652_9000000002\",\"code\":\"SYNreel0203\",\"product_type\":\"clips\",\"play_count\":2031234,\"view_count\":null,\"like_and_view_counts_disabled\":false,\"comment_count\":2030,\"like_count\":101507,\"media_type\":2,\"original_height\":1920,\"original_width\":1080,\"user\":{\"pk\":\"9000000002\",\"id\":\"9000000002\",\"username\":\"other.studio\",\"full_name\":\"Synthetic other.studio\",\"profile_pic_url\":\"https://cdn.example.invalid/synthetic/avatar.jpg\",\"is_verified\":false,\"is_private\":false,\"__typename\":\"XDTUserDict\"},\"coauthor_producers\":[],\"image_versions2\":{\"candidates\":[{\"url\":\"https://cdn.example.invalid/synthetic/203.jpg\",\"width\":640,\"height\":1136}]},\"caption\":null},\"__typename\":\"XDTClipsItemDict\"}}],\"page_info\":{\"has_next_page\":false,\"end_cursor\":null}}},\"extensions\":{\"is_final\":true}}"
+    }
+  ]
+}

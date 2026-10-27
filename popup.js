@@ -3,7 +3,8 @@ var $ = function (id) { return document.getElementById(id); };
 
 function setStatus(text, tone) {
   var el = $("status");
-  el.textContent = text;
+  el.textContent = text || "";
+  el.hidden = !text;
   el.classList.remove("good", "bad");
   if (tone) el.classList.add(tone);
 }
@@ -11,30 +12,6 @@ function setStatus(text, tone) {
 function working(on) {
   $("ranks").classList.toggle("working", !!on);
   $("go").disabled = !!on;
-}
-
-// Which metric each sort ranks on. The views-based ones carry the reels-only
-// caveat; the likes and comments outliers work on any post.
-var SORT_FIELD = {
-  views: "views",
-  outlier: "views",
-  likes: "likes",
-  outlierLikes: "likes",
-  comments: "comments",
-  outlierComments: "comments"
-};
-
-var IS_OUTLIER = { outlier: 1, outlierLikes: 1, outlierComments: 1 };
-
-function isViewBased(sortBy) {
-  return SORT_FIELD[sortBy] === "views";
-}
-
-function fmtNum(n) {
-  if (n === null || n === undefined) return "—";
-  if (n >= 1000000) return (n / 1000000).toFixed(n >= 10000000 ? 0 : 1) + "M";
-  if (n >= 1000) return (n / 1000).toFixed(n >= 100000 ? 0 : 1) + "K";
-  return String(n);
 }
 
 function activeTab(cb) {
@@ -53,15 +30,61 @@ function send(tabId, msg, cb) {
   });
 }
 
-// On open, ask the page whether it already has sorted results.
-activeTab(function (tab) {
-  if (!tab || !tab.url || tab.url.indexOf("instagram.com") === -1) {
-    setStatus("Open an Instagram profile to begin.");
+// ---- Where sorting is allowed ----
+// Only a profile's Reels tab. lib/extract.js holds the check so the popup and
+// the page scripts can't disagree about it.
+var pageKind = window.__IG_SORTER_REELS__.pageKind;
+
+// The reels-tab owner of the active tab, or null. Set on open.
+var here = null;
+
+function wrongPageMessage(kind) {
+  return kind === "profileGrid"
+    ? "Sortcut sorts reels only. Open this profile's Reels tab, then sort."
+    : "Open an Instagram profile's Reels tab to sort.";
+}
+
+function showPage(url) {
+  var page = pageKind(url);
+  here = page.kind === "reelsTab" ? page.owner : null;
+  $("pageNote").textContent = here ? "" : wrongPageMessage(page.kind);
+  $("pageNote").hidden = !!here;
+  return page;
+}
+
+// ---- Sort state ----
+// content.js keeps the run's state in storage, so it survives the popup
+// closing. A "running" state that's stopped updating belongs to a tab that was
+// closed or reloaded mid-run. The collector checks in every scroll, but a
+// background tab's timers can be throttled to once a minute.
+var STALE_MS = 90 * 1000;
+
+function showSortState(s) {
+  if (!s) {
+    setStatus(here ? "Ready to sort @" + here + "'s reels." : "");
     return;
   }
+  var stale = s.status === "running" && Date.now() - (s.updatedAt || 0) > STALE_MS;
+  var mine = s.profile && here && s.profile.toLowerCase() === here;
+  var text = stale ? "Sort interrupted \u2014 the tab was closed or reloaded." : s.message;
+  setStatus("@" + s.profile + " \u00b7 " + text, stale ? "bad" : s.tone || null);
+  working(s.status === "running" && !stale && mine);
+}
+
+function readSortState() {
+  chrome.storage.local.get({ sortState: null }, function (o) {
+    showSortState(o.sortState);
+  });
+}
+
+// On open: say straight away whether this page can be sorted, show the last
+// run, and ask the page whether it already has sorted results to export.
+activeTab(function (tab) {
+  showPage(tab && tab.url);
+  readSortState();
+  if (!tab || !here) return;
   send(tab.id, { type: "ping" }, function (res) {
     if (res && res.have > 0) {
-      setStatus(res.have + " posts ready. Export below.", "good");
       $("csv").disabled = false;
       $("json").disabled = false;
       $("restore").hidden = false;
@@ -69,24 +92,30 @@ activeTab(function (tab) {
   });
 });
 
+chrome.storage.onChanged.addListener(function (changes, area) {
+  if (area !== "local" || !changes.sortState) return;
+  var s = changes.sortState.newValue;
+  showSortState(s);
+  if (s && s.status !== "running" && s.count > 0 && s.profile && s.profile.toLowerCase() === here) {
+    $("csv").disabled = false;
+    $("json").disabled = false;
+    $("restore").hidden = false;
+  }
+});
+
 $("go").addEventListener("click", function () {
   activeTab(function (tab) {
-    if (!tab || !tab.url || tab.url.indexOf("instagram.com") === -1) {
-      setStatus("Open an Instagram profile first.", "bad");
-      return;
-    }
+    // Re-checked on click: the tab may have moved since the popup opened.
+    // Anywhere but a Reels tab, nothing is reloaded or scrolled.
+    var page = showPage(tab && tab.url);
+    if (!tab || page.kind !== "reelsTab") return;
     var sortBy = $("sortBy").value;
-    if (isViewBased(sortBy) && tab.url.indexOf("/reels") === -1) {
-      setStatus("Tip: views only exist on the Reels tab. Sorting anyway.", null);
-    } else {
-      setStatus("Reloading and collecting\u2026");
-    }
     working(true);
     $("csv").disabled = true;
     $("json").disabled = true;
 
     // "all" travels as a string; the collector turns it into an open-ended run
-    // that stops when the profile runs out of posts.
+    // that stops when the profile runs out of reels.
     var limitRaw = $("limit").value;
     var limit = limitRaw === "all" ? "all" : parseInt(limitRaw, 10);
 
@@ -103,62 +132,31 @@ $("go").addEventListener("click", function () {
   });
 });
 
-chrome.runtime.onMessage.addListener(function (msg) {
-  if (msg.type === "sortProgress") {
-    working(true);
-    // An "all posts" run has no target to count towards.
-    setStatus(
-      "Collected " + msg.collected +
-      (msg.target ? " of " + msg.target : "") + "\u2026"
-    );
-  }
-  if (msg.type === "sortDone") {
-    working(false);
-    if (!msg.count) {
-      setStatus(
-        "Captured nothing. Intercepted " + (msg.hits || 0) +
-        " responses. Try the Reels tab or a public profile.",
-        "bad"
-      );
-      return;
-    }
-    var note = "";
-    var rest = msg.count - msg.ranked;
-    var metric = SORT_FIELD[msg.sortBy] || msg.sortBy;
-    if (typeof msg.ranked === "number" && rest > 0) {
-      note = " " + msg.ranked + " have " + metric + ", " + rest + " don't.";
-    }
-    if (IS_OUTLIER[msg.sortBy] && msg.median) {
-      note += " Median " + fmtNum(Math.round(msg.median)) + " " + metric + ".";
-    }
-    if (msg.target && msg.count < msg.target) {
-      // Short of the requested depth means the profile ran out of posts, not
-      // that the metric filtered any out \u2014 worth distinguishing.
-      note += " Profile only had " + msg.total + " posts.";
-    }
-    setStatus(
-      "Sorted " + msg.count + " of " + msg.total + " collected." + note +
-      (msg.rendered ? "" : " Grid not found \u2014 export still works."),
-      "good"
-    );
-    $("csv").disabled = false;
-    $("json").disabled = false;
-    $("restore").hidden = false;
-  }
-  if (msg.type === "sortError") {
-    working(false);
-    setStatus("Couldn't find the grid on this page.", "bad");
-  }
-  // The tile shows its own success state, so the popup only needs to surface
-  // the failure reason — which is too long to fit on a tile.
-  if (msg.type === "transcribeError") {
-    setStatus(msg.error || "Transcription failed.", "bad");
-  }
-  if (msg.type === "transcribeDone") {
-    setStatus("Transcript saved (" + (msg.language || "unknown") + ").", "good");
-    // One more credit used.
-    accountCall("account");
-  }
+// ---- Transcription ----
+// content.js keeps the latest outcome in storage, word for word what the page
+// showed on the reel, because clicking a tile on the page closes the popup
+// before the result comes back. Older than this, it's no longer news.
+var TX_FRESH_MS = 30 * 60 * 1000;
+
+function showTranscribeStatus(t) {
+  var el = $("txStatus");
+  var show = !!(t && t.text && Date.now() - (t.at || 0) < TX_FRESH_MS);
+  el.textContent = show ? t.text : "";
+  el.hidden = !show;
+  el.classList.toggle("good", show && t.ok === true);
+  el.classList.toggle("bad", show && t.ok !== true);
+}
+
+chrome.storage.local.get({ transcribeStatus: null }, function (o) {
+  showTranscribeStatus(o.transcribeStatus);
+});
+
+chrome.storage.onChanged.addListener(function (changes, area) {
+  if (area !== "local" || !changes.transcribeStatus) return;
+  var t = changes.transcribeStatus.newValue;
+  showTranscribeStatus(t);
+  // One more credit used.
+  if (t && t.ok) accountCall("account");
 });
 
 function doExport(kind) {
@@ -168,7 +166,7 @@ function doExport(kind) {
         setStatus("Nothing to export yet. Run a sort first.", "bad");
         return;
       }
-      setStatus("Exported " + res.count + " posts as " + kind.toUpperCase() + ".", "good");
+      setStatus("Exported " + res.count + " reels as " + kind.toUpperCase() + ".", "good");
     });
   });
 }
@@ -255,6 +253,30 @@ $("signOut").addEventListener("click", function () {
 // Sign-in started from a tile, or a session that ended, while the popup is open.
 chrome.storage.onChanged.addListener(function (changes, area) {
   if (area === "local" && changes.auth) accountCall("account");
+});
+
+// ---- Developer capture ----
+// Hidden unless storage has devCapture: true (see README). Downloads the last
+// raw GraphQL bodies the interceptor saw in this tab. The file is saved
+// locally; nothing is sent anywhere.
+chrome.storage.local.get({ devCapture: false }, function (o) {
+  $("debugSample").hidden = o.devCapture !== true;
+});
+
+$("debugSample").addEventListener("click", function () {
+  activeTab(function (tab) {
+    if (!tab || !tab.url || tab.url.indexOf("instagram.com") === -1) {
+      setStatus("Open the Instagram tab you sorted first.", "bad");
+      return;
+    }
+    send(tab.id, { type: "debugSample" }, function (res, err) {
+      if (err || !res || !res.ok) {
+        setStatus((res && res.error) || "Reload the Instagram tab, then try again.", "bad");
+        return;
+      }
+      setStatus("Debug sample saved (" + res.bodies + " GraphQL bodies).", "good");
+    });
+  });
 });
 
 $("restore").addEventListener("click", function () {

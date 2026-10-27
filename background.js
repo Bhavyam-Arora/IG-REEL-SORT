@@ -66,8 +66,21 @@ async function resolveVideoUrl(pk, code) {
   }
 
   var json = await res.json().catch(function () { return null; });
-  var item = json && json.items && json.items[0];
-  var url = item && smallestRendition(item.video_versions);
+  // A logged-out or challenged session often still answers 200, with a login
+  // page or a bare {message, status: "fail"} instead of the media. That is a
+  // refused lookup, not a post without video, and must not be reported as one.
+  if (!json || !Array.isArray(json.items) || !json.items.length) {
+    var why = json && typeof json.message === "string" ? json.message : "";
+    var err = new Error(
+      "Instagram didn't return this reel's video details" +
+      (why ? " (" + why + ")" : json ? "" : " (HTTP " + res.status + ", not JSON)") +
+      ". Make sure you're logged in to Instagram, then try again."
+    );
+    err.detail = "media info " + res.status + (res.redirected ? " redirected to " + res.url : "");
+    throw err;
+  }
+  var item = json.items[0];
+  var url = smallestRendition(item.video_versions);
 
   if (!url) {
     throw new Error(
@@ -78,21 +91,36 @@ async function resolveVideoUrl(pk, code) {
   return url;
 }
 
+// Thrown before the upload, so before /submit, which is where the credit is
+// charged. Sizes are decimal MB, the same unit MAX_BYTES is in.
+// TEMPORARY wording for the Groq free tier — update when moving to Developer (~99 MB).
+// Whole MB unless rounding would put the size at or under the limit
+// ("about 24 MB, over our 24 MB limit"); then one decimal place.
 function tooBig(bytes) {
+  var mb = bytes / 1e6;
+  var limit = Math.round(MAX_BYTES / 1e6);
+  var size = Math.round(mb) <= limit ? mb.toFixed(1) : String(Math.round(mb));
   return (
-    "This video is " + Math.round(bytes / 1e6) + "MB, over the " +
-    MAX_BYTES / 1e6 + "MB upload limit. Long videos can't be transcribed in one piece."
+    "This reel can't be transcribed \u2014 it's about " + size +
+    " MB, over our current " + limit + " MB limit. No credit was used."
   );
 }
 
 async function fetchVideo(url) {
-  var res = await fetch(url, { credentials: "omit" });
+  var res;
+  try {
+    res = await fetch(url, { credentials: "omit" });
+  } catch (e) {
+    throw new Error("Couldn't download the video from Instagram. Check your connection and try again.");
+  }
   if (!res.ok) {
-    // A signed CDN URL that has aged out is by far the most common failure,
-    // and it is fixable by re-running the sort — so say that rather than
-    // surfacing a bare status code.
+    // The URL is normally looked up fresh on this same click, so a refusal
+    // here is rarely an expired link. The status is what makes it reportable.
     if (res.status === 403 || res.status === 410) {
-      throw new Error("This video link has expired. Re-run the sort and try again.");
+      throw new Error(
+        "Instagram's video server refused the download (HTTP " + res.status +
+        "). Reload Instagram and try again."
+      );
     }
     throw new Error("Couldn't download the video (HTTP " + res.status + ").");
   }
@@ -118,7 +146,11 @@ var POLL_MAX_MS = 5000;
 // through the same reel's job instead of starting (and charging) a new one.
 var GIVE_UP_MS = 10 * 60 * 1000;
 
-var UPLOAD_FAILED = "The upload didn't go through. Please try again.";
+// The status (and S3's error code, when it sends one) is kept in the text: a
+// bare "didn't go through" can't be told apart from any other failure in a report.
+function uploadFailed(detail) {
+  return "The upload didn't go through" + (detail ? " (" + detail + ")" : "") + ". Please try again.";
+}
 
 function sleep(ms) {
   return new Promise(function (resolve) { setTimeout(resolve, ms); });
@@ -138,11 +170,15 @@ function errorText(res) {
     return msg || "Transcription is part of Sortcut Pro.";
   }
   if (res.status === 429) return msg || "Too many transcriptions at once. Try again shortly.";
-  if (res.status === 409 || res.status === 413) return UPLOAD_FAILED;
+  if (res.status === 409 || res.status === 413) return uploadFailed("HTTP " + res.status);
   return msg || "Something went wrong (HTTP " + res.status + "). Please try again.";
 }
 
+// The backend refunds a no-speech failure, so it gets its own plain wording.
+var NO_SPEECH = "No speech was detected in this reel. No credit was used.";
+
 function failedText(job) {
+  if (/no speech/i.test(job.error || "")) return NO_SPEECH;
   var msg = job.error || "This transcription did not finish. Please try again.";
   if (job.refunded === true && !/credit was returned/i.test(msg)) {
     msg += " Your credit was returned.";
@@ -153,7 +189,7 @@ function failedText(job) {
 // Same shape content.js has always downloaded as .txt.
 function transcriptOf(job) {
   var text = (job.text || "").trim();
-  if (!text) throw new Error("No speech was detected in this video.");
+  if (!text) throw new Error(NO_SPEECH);
   return {
     text: text,
     original: job.original || null,
@@ -176,9 +212,31 @@ async function upload(link, buf, code) {
   try {
     res = await fetch(link.url, { method: "POST", body: form });
   } catch (e) {
-    throw new Error(UPLOAD_FAILED);
+    throw new Error(uploadFailed("no response"));
   }
-  if (!res.ok) throw new Error(UPLOAD_FAILED);
+  if (!res.ok) {
+    // S3 answers with an XML <Error>; its <Code> (EntityTooLarge, AccessDenied,
+    // …) names the cause and carries nothing secret.
+    var xml = await res.text().catch(function () { return ""; });
+    var s3Code = (/<Code>([^<]{1,64})<\/Code>/.exec(xml) || [])[1];
+    throw new Error(uploadFailed("HTTP " + res.status + (s3Code ? ", " + s3Code : "")));
+  }
+}
+
+// A worker that makes no extension API call for ~30 s can be stopped, and a
+// fetch in flight doesn't count. The download and the S3 upload are plain
+// fetches that can outlast that, so tick a cheap runtime call until they end.
+var KEEPALIVE_MS = 20 * 1000;
+
+async function keepAlive(work) {
+  var timer = setInterval(function () {
+    chrome.runtime.getPlatformInfo().catch(function () {});
+  }, KEEPALIVE_MS);
+  try {
+    return await work();
+  } finally {
+    clearInterval(timer);
+  }
 }
 
 // Every pass reads storage (inside api) and may message the tab; both are
@@ -215,11 +273,10 @@ async function waitForJob(jobId, status, tell) {
 async function run(post, tell) {
   if (!post || !post.code) throw new Error("No post data. Re-run the sort and try again.");
 
-  // The Transcribe click is the user gesture that lets the Google window open.
-  if (!(await getAuth())) {
-    tell("Sign in to Sortcut in the window that opened…");
-    await signIn();
-  }
+  // Signed out: the page shows its own sign-in dialog, and the Google window
+  // opens only from that dialog's button (pageSignIn below), never straight
+  // from a Transcribe click.
+  if (!(await getAuth())) throw signedOutError("You need to be signed in first.");
 
   tell("Transcribing…");
   var res = await api("/v1/transcriptions", { method: "POST", body: { reelCode: post.code } });
@@ -237,8 +294,10 @@ async function run(post, tell) {
     // Normally null — grid payloads don't carry a rendition — so this almost
     // always falls through to the on-demand lookup.
     var url = post.videoUrl || (await resolveVideoUrl(post.pk, post.code));
-    var buf = await fetchVideo(url);
-    await upload(job.upload, buf, post.code);
+    await keepAlive(async function () {
+      var buf = await fetchVideo(url);
+      await upload(job.upload, buf, post.code);
+    });
 
     var sub = await api("/v1/transcriptions/" + encodeURIComponent(job.jobId) + "/submit", {
       method: "POST"
@@ -286,7 +345,11 @@ function reply(promise, sendResponse, wrap) {
       sendResponse(wrap(r));
     },
     function (err) {
-      sendResponse({ ok: false, error: err && err.message ? err.message : String(err) });
+      sendResponse({
+        ok: false,
+        error: err && err.message ? err.message : String(err),
+        signedOut: !!(err && err.signedOut)
+      });
     }
   );
   return true; // keep the channel open for the async reply
@@ -295,10 +358,26 @@ function reply(promise, sendResponse, wrap) {
 chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
   if (!msg) return false;
   if (msg.type === "transcribe") {
-    var tell = progressTo(sender, msg.post && msg.post.code);
-    return reply(run(msg.post, tell), sendResponse, function (r) {
+    var code = msg.post && msg.post.code;
+    var tell = progressTo(sender, code);
+    // The one place every transcription failure passes through, so this is
+    // where the service-worker console shows it, with any detail that doesn't
+    // belong in the on-page text.
+    var job = run(msg.post, tell).catch(function (err) {
+      if (!(err && err.signedOut)) {
+        console.warn("[GridSorter] transcription failed", code, "—", err && err.message,
+          err && err.detail ? "(" + err.detail + ")" : "");
+      }
+      throw err;
+    });
+    return reply(job, sendResponse, function (r) {
       return { ok: true, result: r };
     });
+  }
+  // From the page's sign-in dialog. Unlike the popup's signIn it doesn't load
+  // /v1/me afterwards: the transcription it was opened for is the next call.
+  if (msg.type === "pageSignIn") {
+    return reply(signIn(), sendResponse, function () { return { ok: true }; });
   }
   // From the popup. Sign-in runs here rather than in the popup because the
   // Google window takes focus and closes the popup mid-flow.

@@ -1,0 +1,8 @@
+{
+  "name": "sortcut-extension",
+  "private": true,
+  "description": "Not published. Exists only so `npm test` runs the Node test suite.",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  }
+}
