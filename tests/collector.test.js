@@ -123,3 +123,99 @@ test("reels missing the metric are counted, not silently ranked", async () => {
   assert.equal(r.posts.length, 10);
   assert.equal(r.ranked, 2, "only the reels with views are ranked");
 });
+
+// ---- Free: the last N days only ----
+
+const DAY = 24 * 60 * MIN;
+// A reel `days` old by the page's clock when the run started.
+const aged = (w, days) => reel("demo.creator", { createdAt: new Date(w.started - days * DAY).toISOString() });
+
+// A Reels tab as Instagram serves it: three old pinned reels on top, then
+// newest first. Each scroll brings the next `per` reels of `feed`.
+function reelsTab(feed, per) {
+  return (w, n) => {
+    if (!w.started) return;
+    feed(w)
+      .slice((n - 1) * per, n * per)
+      .forEach((r) => w.__IG_SORTER_BUFFER__.push(r));
+  };
+}
+
+function freeProfile(w) {
+  if (!w.feed) {
+    w.feed = [aged(w, 400), aged(w, 300), aged(w, 200)];
+    for (let d = 1; d <= 49; d += 4) w.feed.push(aged(w, d)); // 13 recent
+    for (let d = 51; d <= 400; d += 3) w.feed.push(aged(w, d)); // and years more
+  }
+  return w.feed;
+}
+
+const runFree = (job) =>
+  run(job, reelsTab(freeProfile, 4), (w) => {
+    // When the run starts: the collector's 2.5s wait is already on the fake
+    // clock, which advances when a timer is set.
+    w.started = w.clock.now;
+  });
+
+test("Free: only reels from the last 50 days are counted and sorted", async () => {
+  const { w, r } = await runFree({ sortBy: "views", limit: 100, days: 50 });
+  const cutoff = w.started - 50 * DAY;
+  assert.equal(r.days, 50);
+  assert.equal(r.posts.length, 13, "the 13 recent reels, none of the pinned or older ones");
+  assert.equal(r.total, 13);
+  assert.ok(r.seen > r.total, "older reels were seen, and left out");
+  assert.ok(r.posts.every((p) => Date.parse(p.createdAt) >= cutoff));
+});
+
+test("Free: stops as soon as reels older than the range arrive", async () => {
+  const { w, r } = await runFree({ sortBy: "views", limit: "all", days: 50 });
+  assert.equal(r.reason, "past_range");
+  // Scroll 1 holds the 3 pins (which mustn't stop it) and 1 recent reel, 2-4
+  // the other 12 recent, 5 the first old ones after them. Nothing after that.
+  assert.equal(w.scrolls, 5);
+  assert.ok(w.__IG_SORTER_BUFFER__.length < freeProfile(w).length / 4);
+});
+
+test("Free: depth still applies within the range", async () => {
+  const { r } = await runFree({ sortBy: "likes", limit: 10, days: 50 });
+  assert.equal(r.reason, "complete");
+  assert.equal(r.posts.length, 10);
+});
+
+test("Free: never more than maxReels, whatever depth is asked for", async () => {
+  for (const limit of [300, "all"]) {
+    const { r } = await run({ sortBy: "views", limit, days: 50, maxReels: 50 }, (w) => {
+      for (let i = 0; i < 4; i++) w.__IG_SORTER_BUFFER__.push(reel("demo.creator"));
+    });
+    assert.equal(r.reason, "complete", String(limit));
+    assert.equal(r.posts.length, 50, String(limit));
+    assert.equal(r.target, 50, "progress reads 'of 50'");
+  }
+});
+
+test("Free: a reel whose date can't be read isn't counted", async () => {
+  const { r } = await run({ sortBy: "views", limit: 100, days: 50 }, (w, n) => {
+    if (n === 1) {
+      w.__IG_SORTER_BUFFER__.push(reel("demo.creator", { createdAt: null }));
+      w.__IG_SORTER_BUFFER__.push(reel("demo.creator"));
+      w.__IG_SORTER_PAGEINFO__.hasNextPage = false;
+    }
+  });
+  assert.equal(r.reason, "end");
+  assert.equal(r.posts.length, 1);
+});
+
+test("Free: no reels in the range at all still ends, with none", async () => {
+  const { r } = await run({ sortBy: "views", limit: 100, days: 50 }, (w) => {
+    for (let i = 0; i < 4; i++) w.__IG_SORTER_BUFFER__.push(reel("demo.creator", { createdAt: "2025-01-01T00:00:00Z" }));
+  });
+  assert.equal(r.reason, "past_range");
+  assert.equal(r.posts.length, 0);
+});
+
+test("Pro (no range): the same profile sorts its full history", async () => {
+  const { w, r } = await runFree({ sortBy: "views", limit: "all" });
+  assert.equal(r.days, null);
+  assert.equal(r.reason, "stalled", "ran past the old reels to the end of the feed");
+  assert.equal(r.posts.length, freeProfile(w).length);
+});

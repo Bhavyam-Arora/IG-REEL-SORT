@@ -177,7 +177,7 @@
     // rather than inside it, so clicking the card can't open the post.
     ".igs-cell{position:relative;min-width:0;}",
 
-    // Shared close button: the failure card and the sign-in dialog.
+    // Shared close button: the failure card and the dialogs.
     ".igs-x{position:absolute;top:10px;right:10px;width:28px;height:28px;",
     "margin:0;padding:0;border:0;border-radius:7px;background:transparent;",
     "color:#918AA0;display:flex;align-items:center;justify-content:center;",
@@ -195,7 +195,7 @@
     "font:700 10px/1.2 " + MONO + ";letter-spacing:.06em;text-transform:uppercase;}",
     ".igs-card .igs-x{top:3px;right:3px;width:22px;height:22px;font-size:16px;}",
 
-    // Sign-in dialog. The palette and the three-bar mark are the popup's.
+    // Sign-in and Upgrade dialogs. The palette and the three-bar mark are the popup's.
     ".igs-modal{position:fixed;inset:0;z-index:2147483647;box-sizing:border-box;",
     "display:flex;align-items:center;justify-content:center;padding:16px;",
     "background:rgba(10,9,13,.55);}",
@@ -312,18 +312,22 @@
     if (old) old.remove();
   }
 
-  // ---- Sign-in dialog ----
-  // A signed-out Transcribe click lands here instead of opening Google: the
-  // Google window only opens from this dialog's button. One dialog at a time;
-  // opening another abandons the first.
-  var signInDialog = null; // { close }
+  // ---- Dialogs ----
+  // A Transcribe click that can't go ahead lands in one of these instead: the
+  // sign-in dialog when signed out (Google only opens from its button), the
+  // Upgrade dialog on Free. One dialog at a time; opening another abandons the
+  // first.
+  var PRICING_URL = "https://sortcut.co/pricing.html";
+  var dialog = null; // { close }
 
-  function closeSignInDialog() {
-    if (signInDialog) signInDialog.close();
+  function closeDialog() {
+    if (dialog) dialog.close();
   }
 
-  function showSignInDialog(returnFocus, onSignedIn) {
-    closeSignInDialog();
+  // o: { title, text, action, onAction(ui) }. onAction gets
+  // { go, err, close, isOpen } and decides what the main button does.
+  function showDialog(returnFocus, o) {
+    closeDialog();
     ensureStyles();
 
     var open = true;
@@ -339,12 +343,12 @@
     marks.setAttribute("aria-hidden", "true");
     for (var i = 0; i < 3; i++) marks.appendChild(el("i"));
     head.appendChild(marks);
-    var title = el("h2", "", "Sign in to transcribe");
+    var title = el("h2", "", o.title);
     title.id = "igs-dialog-title";
     head.appendChild(title);
     box.appendChild(head);
 
-    var text = el("p", "", "You need to be signed in first.");
+    var text = el("p", "", o.text);
     text.id = "igs-dialog-text";
     box.appendChild(text);
 
@@ -353,7 +357,7 @@
     err.hidden = true;
     box.appendChild(err);
 
-    var go = el("button", "igs-btn", "Sign in with Google");
+    var go = el("button", "igs-btn", o.action);
     go.type = "button";
     box.appendChild(go);
 
@@ -364,7 +368,7 @@
     function close() {
       if (!open) return;
       open = false;
-      signInDialog = null;
+      dialog = null;
       document.removeEventListener("keydown", onKey, true);
       backdrop.remove();
       if (returnFocus && returnFocus.isConnected) returnFocus.focus();
@@ -388,29 +392,12 @@
       }
     }
 
+    var ui = { go: go, err: err, close: close, isOpen: function () { return open; } };
     go.addEventListener("click", function (ev) {
       ev.preventDefault();
       ev.stopPropagation();
       if (go.disabled) return;
-      go.disabled = true;
-      go.textContent = "Signing in…";
-      err.hidden = true;
-      chrome.runtime.sendMessage({ type: "pageSignIn" }, function (res) {
-        var failed = chrome.runtime.lastError || !res || !res.ok;
-        // Closed while Google's window was up: the sign-in itself stands, but
-        // the transcription it was opened for is dropped with the dialog.
-        if (!open) return;
-        if (failed) {
-          go.disabled = false;
-          go.textContent = "Sign in with Google";
-          // Closing Google's window comes back as "Sign-in was cancelled."
-          err.textContent = (res && res.error) || "Extension worker unavailable — reload the extension.";
-          err.hidden = false;
-          return;
-        }
-        close();
-        onSignedIn();
-      });
+      o.onAction(ui);
     });
 
     backdrop.addEventListener("click", function (ev) {
@@ -418,8 +405,51 @@
     });
     document.addEventListener("keydown", onKey, true);
     (document.body || document.documentElement).appendChild(backdrop);
-    signInDialog = { close: close };
+    dialog = { close: close };
     go.focus();
+  }
+
+  function showSignInDialog(returnFocus, onSignedIn) {
+    showDialog(returnFocus, {
+      title: "Sign in to transcribe",
+      text: "You need to be signed in first.",
+      action: "Sign in with Google",
+      onAction: function (ui) {
+        ui.go.disabled = true;
+        ui.go.textContent = "Signing in…";
+        ui.err.hidden = true;
+        chrome.runtime.sendMessage({ type: "pageSignIn" }, function (res) {
+          var failed = chrome.runtime.lastError || !res || !res.ok;
+          // Closed while Google's window was up: the sign-in itself stands, but
+          // the transcription it was opened for is dropped with the dialog.
+          if (!ui.isOpen()) return;
+          if (failed) {
+            ui.go.disabled = false;
+            ui.go.textContent = "Sign in with Google";
+            // Closing Google's window comes back as "Sign-in was cancelled."
+            ui.err.textContent = (res && res.error) || "Extension worker unavailable — reload the extension.";
+            ui.err.hidden = false;
+            return;
+          }
+          ui.close();
+          // Tries the reel again, which on a Free account opens the Upgrade
+          // dialog instead of transcribing.
+          onSignedIn();
+        });
+      }
+    });
+  }
+
+  function showProDialog(returnFocus) {
+    showDialog(returnFocus, {
+      title: "Upgrade to transcribe",
+      text: "Transcription is part of Sortcut Pro.",
+      action: "Upgrade to Pro",
+      onAction: function (ui) {
+        window.open(PRICING_URL, "_blank", "noopener");
+        ui.close();
+      }
+    });
   }
 
   // A tile is an <a> to the post, so anything placed inside it has to stop its
@@ -482,13 +512,15 @@
           fail("Extension worker unavailable — reload the extension.");
           return;
         }
-        if (!res.ok && res.signedOut) {
-          // Nothing was attempted. The dialog takes over, and a successful
-          // sign-in runs this same reel again.
+        if (!res.ok && (res.signedOut || res.needsPro)) {
+          // Nothing was attempted. A dialog takes over: signed out, a
+          // successful sign-in runs this same reel again; on Free, it offers
+          // the upgrade.
           delete TX_PROGRESS[p.code];
           btn.disabled = false;
           state("idle", IDLE_LABEL);
-          showSignInDialog(btn, start);
+          if (res.signedOut) showSignInDialog(btn, start);
+          else showProDialog(btn);
           return;
         }
         if (!res.ok) {
@@ -527,7 +559,7 @@
     );
   }
 
-  function buildGrid(posts, sortBy, ranked, median) {
+  function buildGrid(posts, sortBy, ranked, median, days) {
     if (ranked === null || ranked === undefined) ranked = posts.length;
     // Which metric the outlier score is measured on, or null for a plain sort.
     var outlierOn = OUTLIER_FIELD[sortBy] || null;
@@ -562,6 +594,7 @@
       label.textContent =
         posts.length + " reels sorted by " + sortBy + " \u00b7 highest first";
     }
+    if (days) label.textContent += " \u00b7 last " + days + " days";
     bar.appendChild(label);
 
     var restore = document.createElement("button");
@@ -729,7 +762,7 @@
   }
 
   function teardown() {
-    closeSignInDialog();
+    closeDialog();
     if (observer) {
       observer.disconnect();
       observer = null;
@@ -739,7 +772,7 @@
     unhideAll();
   }
 
-  function renderSorted(posts, sortBy, ranked, median) {
+  function renderSorted(posts, sortBy, ranked, median, days) {
     teardown();
 
     var container = findGridContainer();
@@ -767,7 +800,7 @@
     hide(container);
     var parents = hideBelow(container);
 
-    var wrap = buildGrid(posts, sortBy, ranked, median);
+    var wrap = buildGrid(posts, sortBy, ranked, median, days);
     container.parentElement.insertBefore(wrap, container);
 
     parents.forEach(function (p) {
@@ -780,8 +813,9 @@
   // ---------------------------------------------------------------
   // 5. Export
   // ---------------------------------------------------------------
-  function download(filename, text, mime) {
-    var blob = new Blob([text], { type: mime });
+  // data is text or bytes (a Uint8Array).
+  function download(filename, data, mime) {
+    var blob = new Blob([data], { type: mime });
     var url = URL.createObjectURL(blob);
     var a = document.createElement("a");
     a.href = url;
@@ -815,13 +849,15 @@
       download(profileSlug() + "-sorted.json", JSON.stringify(clean, null, 2), "application/json");
       return;
     }
-    var cols = ["code", "url", "views", "likes", "comments", "createdAt", "isVideo", "caption"];
-    // Only carry the column when the run actually produced scores, so a views
-    // or likes export doesn't ship a column of blanks.
-    var hasScore = LAST.some(function (p) {
-      return typeof p.outlierScore === "number";
-    });
-    if (hasScore) cols.splice(3, 0, "outlierScore");
+    var cols = exportColumns(LAST);
+    if (kind === "xlsx") {
+      download(
+        profileSlug() + "-sorted.xlsx",
+        buildXlsx(cols, LAST),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      );
+      return;
+    }
 
     var esc = function (v) {
       return '"' + String(v === null || v === undefined ? "" : v).replace(/"/g, '""') + '"';
@@ -842,6 +878,230 @@
     download(profileSlug() + "-sorted.csv", "\uFEFF" + rows.join("\r\n"), "text/csv");
   }
 
+  // The CSV's and the Excel file's columns, in order.
+  function exportColumns(posts) {
+    var cols = ["code", "url", "views", "likes", "comments", "createdAt", "isVideo", "caption"];
+    // Only carry the column when the run actually produced scores, so a views
+    // or likes export doesn't ship a column of blanks.
+    var hasScore = posts.some(function (p) {
+      return typeof p.outlierScore === "number";
+    });
+    if (hasScore) cols.splice(3, 0, "outlierScore");
+    return cols;
+  }
+
+  // ---- Excel (.xlsx) ----
+  // Written here rather than with a library: an .xlsx is a zip of a few XML
+  // files, and one sheet of numbers, dates and text needs very little of the
+  // format. The zip is "stored" (uncompressed), which every spreadsheet app
+  // reads. Cells are typed: counts and scores are numbers, createdAt a real
+  // date, isVideo a boolean, and everything else, links included, plain text.
+  var XLSX_TYPE = {
+    views: "number", likes: "number", comments: "number", outlierScore: "score",
+    createdAt: "date", isVideo: "bool"
+  };
+  // Indexes into cellXfs in XLSX_STYLES.
+  var XF_DATE = 1;
+  var XF_HEADER = 2;
+  var XF_SCORE = 3;
+  var XLSX_WIDTH = { code: 14, url: 44, createdAt: 20, caption: 60 };
+  var XLSX_TEXT_MAX = 32767; // Excel's limit for one cell
+  var XLSX_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+  var REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+  var PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships";
+  var XML_HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
+
+  var XLSX_STYLES =
+    XML_HEAD + '<styleSheet xmlns="' + XLSX_NS + '">' +
+    '<numFmts count="1"><numFmt numFmtId="164" formatCode="yyyy-mm-dd hh:mm:ss"/></numFmts>' +
+    '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font>' +
+    '<font><b/><sz val="11"/><name val="Calibri"/></font></fonts>' +
+    '<fills count="2"><fill><patternFill patternType="none"/></fill>' +
+    '<fill><patternFill patternType="gray125"/></fill></fills>' +
+    '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>' +
+    '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
+    '<cellXfs count="4">' +
+    '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>' +
+    '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>' +
+    '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>' +
+    '<xf numFmtId="2" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>' +
+    '</cellXfs>' +
+    '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>' +
+    '</styleSheet>';
+
+  // XML 1.0 can't carry most control characters at all, even escaped.
+  function xmlText(v) {
+    return String(v)
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function colName(i) {
+    var s = "";
+    for (i += 1; i > 0; i = Math.floor((i - 1) / 26)) {
+      s = String.fromCharCode(65 + ((i - 1) % 26)) + s;
+    }
+    return s;
+  }
+
+  // One cell, or "" for an empty one.
+  function xlsxCell(ref, v, type) {
+    if (v === null || v === undefined || v === "") return "";
+    if (type === "number" || type === "score") {
+      if (typeof v !== "number" || !isFinite(v)) return "";
+      if (type === "score") v = Math.round(v * 100) / 100;
+      return '<c r="' + ref + '"' + (type === "score" ? ' s="' + XF_SCORE + '"' : "") +
+        "><v>" + v + "</v></c>";
+    }
+    if (type === "date") {
+      var t = Date.parse(v);
+      if (isNaN(t)) return "";
+      // Excel counts days from 1899-12-30; createdAt is UTC, and so is this.
+      return '<c r="' + ref + '" s="' + XF_DATE + '"><v>' + (t / 86400000 + 25569) + "</v></c>";
+    }
+    if (type === "bool") return '<c r="' + ref + '" t="b"><v>' + (v ? 1 : 0) + "</v></c>";
+    if (type === "header") {
+      return '<c r="' + ref + '" s="' + XF_HEADER + '" t="inlineStr"><is><t>' + xmlText(v) + "</t></is></c>";
+    }
+    var text = String(v).slice(0, XLSX_TEXT_MAX);
+    return '<c r="' + ref + '" t="inlineStr"><is><t xml:space="preserve">' + xmlText(text) + "</t></is></c>";
+  }
+
+  function xlsxSheet(cols, posts) {
+    var rows = [];
+    var cells = cols.map(function (c, i) { return xlsxCell(colName(i) + "1", c, "header"); });
+    rows.push('<row r="1">' + cells.join("") + "</row>");
+    posts.forEach(function (p, n) {
+      var r = n + 2;
+      var line = cols.map(function (c, i) {
+        return xlsxCell(colName(i) + r, p[c], XLSX_TYPE[c] || "text");
+      });
+      rows.push('<row r="' + r + '">' + line.join("") + "</row>");
+    });
+    var widths = cols.map(function (c, i) {
+      return '<col min="' + (i + 1) + '" max="' + (i + 1) + '" width="' + (XLSX_WIDTH[c] || 11) +
+        '" customWidth="1"/>';
+    });
+    return XML_HEAD + '<worksheet xmlns="' + XLSX_NS + '">' +
+      // The header row stays put while scrolling.
+      '<sheetViews><sheetView workbookViewId="0">' +
+      '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>' +
+      "</sheetView></sheetViews>" +
+      "<cols>" + widths.join("") + "</cols>" +
+      "<sheetData>" + rows.join("") + "</sheetData></worksheet>";
+  }
+
+  // Uint8Array of a complete .xlsx: one sheet, "Reels".
+  function buildXlsx(cols, posts) {
+    return zipStored([
+      ["[Content_Types].xml", XML_HEAD +
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+        '<Default Extension="xml" ContentType="application/xml"/>' +
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+        '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
+        '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' +
+        "</Types>"],
+      ["_rels/.rels", XML_HEAD + '<Relationships xmlns="' + PKG_REL_NS + '">' +
+        '<Relationship Id="rId1" Type="' + REL_NS + '/officeDocument" Target="xl/workbook.xml"/>' +
+        "</Relationships>"],
+      ["xl/workbook.xml", XML_HEAD + '<workbook xmlns="' + XLSX_NS + '" xmlns:r="' + REL_NS + '">' +
+        '<sheets><sheet name="Reels" sheetId="1" r:id="rId1"/></sheets></workbook>'],
+      ["xl/_rels/workbook.xml.rels", XML_HEAD + '<Relationships xmlns="' + PKG_REL_NS + '">' +
+        '<Relationship Id="rId1" Type="' + REL_NS + '/worksheet" Target="worksheets/sheet1.xml"/>' +
+        '<Relationship Id="rId2" Type="' + REL_NS + '/styles" Target="styles.xml"/>' +
+        "</Relationships>"],
+      ["xl/styles.xml", XLSX_STYLES],
+      ["xl/worksheets/sheet1.xml", xlsxSheet(cols, posts)]
+    ]);
+  }
+
+  var CRC_TABLE = null;
+
+  function crc32(bytes) {
+    if (!CRC_TABLE) {
+      CRC_TABLE = new Uint32Array(256);
+      for (var n = 0; n < 256; n++) {
+        var c = n;
+        for (var k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+        CRC_TABLE[n] = c >>> 0;
+      }
+    }
+    var crc = 0xffffffff;
+    for (var i = 0; i < bytes.length; i++) crc = CRC_TABLE[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8);
+    return (crc ^ 0xffffffff) >>> 0;
+  }
+
+  // A zip of [name, text] entries, each stored uncompressed: a local header
+  // and the bytes per file, then the central directory and its end record.
+  function zipStored(entries) {
+    var enc = new TextEncoder();
+    var now = new Date();
+    var dosTime = (now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1);
+    var dosDate = ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
+    var parts = [];
+    var central = [];
+    var offset = 0;
+
+    entries.forEach(function (e) {
+      var name = enc.encode(e[0]);
+      var data = enc.encode(e[1]);
+      var crc = crc32(data);
+
+      var local = new DataView(new ArrayBuffer(30));
+      local.setUint32(0, 0x04034b50, true);
+      local.setUint16(4, 20, true); // version needed: 2.0
+      local.setUint16(6, 0, true); // flags
+      local.setUint16(8, 0, true); // method: stored
+      local.setUint16(10, dosTime, true);
+      local.setUint16(12, dosDate, true);
+      local.setUint32(14, crc, true);
+      local.setUint32(18, data.length, true);
+      local.setUint32(22, data.length, true);
+      local.setUint16(26, name.length, true);
+      local.setUint16(28, 0, true); // extra field length
+      parts.push(new Uint8Array(local.buffer), name, data);
+
+      var dir = new DataView(new ArrayBuffer(46));
+      dir.setUint32(0, 0x02014b50, true);
+      dir.setUint16(4, 20, true); // version made by
+      dir.setUint16(6, 20, true); // version needed
+      dir.setUint16(8, 0, true);
+      dir.setUint16(10, 0, true);
+      dir.setUint16(12, dosTime, true);
+      dir.setUint16(14, dosDate, true);
+      dir.setUint32(16, crc, true);
+      dir.setUint32(20, data.length, true);
+      dir.setUint32(24, data.length, true);
+      dir.setUint16(28, name.length, true);
+      // extra, comment, disk number, internal and external attributes: all 0
+      dir.setUint32(42, offset, true);
+      central.push(new Uint8Array(dir.buffer), name);
+
+      offset += 30 + name.length + data.length;
+    });
+
+    var dirSize = central.reduce(function (n, b) { return n + b.length; }, 0);
+    var end = new DataView(new ArrayBuffer(22));
+    end.setUint32(0, 0x06054b50, true);
+    end.setUint16(8, entries.length, true);
+    end.setUint16(10, entries.length, true);
+    end.setUint32(12, dirSize, true);
+    end.setUint32(16, offset, true);
+
+    var all = parts.concat(central, [new Uint8Array(end.buffer)]);
+    var out = new Uint8Array(offset + dirSize + 22);
+    var at = 0;
+    all.forEach(function (b) {
+      out.set(b, at);
+      at += b.length;
+    });
+    return out;
+  }
+
   // ---------------------------------------------------------------
   // 6. Sort state
   // ---------------------------------------------------------------
@@ -849,26 +1109,76 @@
   // sort's progress. The run's state lives in storage instead; the popup reads
   // it on open and follows it live. One run at a time: a new sort replaces it.
   //   status: "running" | "done" | "stopped"
-  //   message: the line the popup shows, written here so wording lives in one place
-  var SORT_LABEL = {
-    views: "views",
-    likes: "likes",
-    comments: "comments",
-    outlier: "outlier score (views)",
-    outlierLikes: "outlier score (likes)",
-    outlierComments: "outlier score (comments)"
-  };
+  //   message: the progress line, while running
+  //   warning: what went wrong on this page, once finished; null when nothing did
+  // Each state is stamped with the tab, profile and page load it belongs to, and
+  // the popup shows it only on that same page. The worker ends it when the tab
+  // loads a new page or closes; leaving the profile ends it here (watchProfile).
+  var LOAD_ID = Date.now().toString(36) + Math.random().toString(36).slice(2);
+  var TAB_ID = null; // from the worker on load, or the popup's startSort until then
+  var RUN_PROFILE = null; // lowercased owner of the Reels tab the run was started on
   var lastStateWrite = 0;
   var lastStateCount = -1;
 
   function saveSortState(state) {
-    state.profile = profileSlug();
+    state.tabId = TAB_ID;
+    state.loadId = LOAD_ID;
+    state.profile = RUN_PROFILE;
     state.path = location.pathname;
     state.updatedAt = Date.now();
     lastStateWrite = state.updatedAt;
     try {
       chrome.storage.local.set({ sortState: state });
     } catch (e) {}
+  }
+
+  // Only this page load's own state: a newer run, maybe in another tab, may
+  // have replaced it already.
+  function dropSortState() {
+    try {
+      chrome.storage.local.get({ sortState: null }, function (o) {
+        var s = o.sortState;
+        if (s && s.loadId === LOAD_ID) chrome.storage.local.remove("sortState");
+      });
+    } catch (e) {}
+  }
+
+  function ownerHere() {
+    return profileSlug().toLowerCase();
+  }
+
+  // Opening a post or reel puts its own path in the address bar over the
+  // profile without leaving it.
+  var OVER_PROFILE = { p: 1, reel: 1, tv: 1 };
+
+  function leftProfile() {
+    var here = ownerHere();
+    return !!RUN_PROFILE && here !== RUN_PROFILE && !OVER_PROFILE[here];
+  }
+
+  // Instagram moves between pages without loading a new one, so a run's page
+  // can be left without the worker hearing of it. Leaving the profile ends the
+  // sort: the sorted grid goes, and so do its exports and its popup state.
+  var watching = false;
+  var lastPath = null;
+
+  function watchProfile() {
+    if (watching) return;
+    watching = true;
+    lastPath = location.pathname;
+    setInterval(function () {
+      if (location.pathname === lastPath) return;
+      lastPath = location.pathname;
+      if (leftProfile()) endRun();
+    }, 1000);
+  }
+
+  // RUN_PROFILE stays: a result still on its way from the collector is then
+  // seen to belong to the profile that was left.
+  function endRun() {
+    teardown();
+    LAST = [];
+    dropSortState();
   }
 
   function minutes(ms) {
@@ -886,33 +1196,37 @@
       sortBy: d.sortBy,
       collected: d.collected,
       target: d.target,
+      days: d.days || null,
       message:
         "Collecting reels\u2026 " + d.collected + (d.target ? " of " + d.target : "") + " so far."
     });
   }
 
+  // A finished run says nothing in the popup unless something on this page
+  // went wrong: the sorted grid itself is the result.
   function resultState(d, rendered) {
     var n = (d.posts || []).length;
-    var label = SORT_LABEL[d.sortBy] || d.sortBy;
-    var metric = OUTLIER_FIELD[d.sortBy] || d.sortBy;
     var state = {
-      status: d.reason === "complete" || d.reason === "end" ? "done" : "stopped",
+      status: d.reason === "complete" || d.reason === "end" || d.reason === "past_range" ? "done" : "stopped",
       reason: d.reason,
       sortBy: d.sortBy,
       collected: d.total,
       target: d.target,
+      days: d.days || null,
       count: n,
-      tone: "good"
+      warning: null
     };
 
     if (!n) {
       state.status = "stopped";
-      state.tone = "bad";
-      state.message =
+      state.warning =
         d.reason === "navigated"
-          ? "Stopped: you left the Reels tab before any reels were collected."
+          ? null // the popup is on some other page by now, and says so
           : d.reason === "wrong_page"
           ? "Open an Instagram profile's Reels tab to sort."
+          : d.days && d.seen > 0
+          ? // Reels arrived, just none recent enough for a Free run.
+            "No reels from the last " + d.days + " days."
           : d.unreadable > 0
           ? // Reels arrived but none named an author we could match.
             "Couldn't read reels \u2014 Instagram may have changed something."
@@ -920,41 +1234,55 @@
       return state;
     }
 
-    var lead = {
-      complete: "Sorted " + n + " reels by " + label + ".",
-      end: "Sorted all " + d.total + " reels by " + label + " \u2014 that's the whole Reels tab.",
-      stalled:
-        "Stopped: Instagram sent no new reels for a while. Sorted the " + d.total +
-        " collected by " + label + ".",
-      timeout:
-        "Stopped at the " + minutes(d.limitMs) + " limit. Sorted the " + d.total +
-        " collected by " + label + ".",
-      navigated:
-        "Stopped: you left the Reels tab. " + d.total + " reels collected \u2014 export still works."
-    }[d.reason] || "Sorted " + n + " reels by " + label + ".";
-
-    var note = "";
-    var rest = n - (typeof d.ranked === "number" ? d.ranked : n);
-    if (METRIC_SORTS[d.sortBy] && rest > n / 2) {
-      // Ranking a handful and listing the rest after them would look like a
-      // complete ranking. Say so instead.
-      state.tone = "";
-      note =
-        " Most of these reels (" + rest + " of " + n + ") have no " + metric +
-        " count, so they can't be ranked by " + metric + "; they're listed last, unranked.";
-    } else if (METRIC_SORTS[d.sortBy] && rest > 0) {
-      note = " " + rest + " have no " + metric + " count and are listed last.";
-    }
-    if (OUTLIER_FIELD[d.sortBy] && d.median) {
-      note += " Median " + fmt(Math.round(d.median)) + " " + metric + ".";
+    var warnings = [];
+    if (d.reason === "timeout") {
+      warnings.push(
+        "Stopped at the " + minutes(d.limitMs) + " time limit \u2014 sorted the " + d.total +
+        " reels collected by then."
+      );
     }
     if (!rendered && d.reason !== "navigated") {
-      note += " Couldn't place the sorted grid on the page \u2014 export still works.";
+      warnings.push("Couldn't place the sorted grid on the page \u2014 export still works.");
     }
-    if (state.status === "stopped") state.tone = "";
-    state.message = lead + note;
+    state.warning = warnings.join(" ") || null;
     return state;
   }
+
+  // The job a sort reloaded the page for, if this load is that reload.
+  function pendingJob() {
+    try {
+      var raw = sessionStorage.getItem("igSorterJob");
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // On load: carry on the sort this reload is for, or let the worker end any
+  // state this tab had from its last page.
+  (function () {
+    var job = pendingJob();
+    if (job) {
+      TAB_ID = job.tabId === undefined ? null : job.tabId;
+      RUN_PROFILE = ownerHere();
+      watchProfile();
+      saveSortState({
+        status: "running",
+        sortBy: job.sortBy,
+        collected: 0,
+        target: job.limit === "all" ? null : job.limit, // capped by startSort already
+        days: job.days || null,
+        message: "Collecting reels\u2026"
+      });
+    }
+    try {
+      chrome.runtime.sendMessage({ type: "pageLoad", loadId: LOAD_ID, keep: !!job }, function (res) {
+        if (chrome.runtime.lastError || !res) return;
+        // The worker's word wins: a duplicated tab inherits the job, tab id and all.
+        if (typeof res.tabId === "number") TAB_ID = res.tabId;
+      });
+    } catch (e) {}
+  })();
 
   // ---------------------------------------------------------------
   // 7. Messages from the page world
@@ -1000,11 +1328,16 @@
     }
 
     if (d.type === "result") {
+      // Run off to another profile: nothing of it belongs on this page.
+      if (leftProfile()) {
+        endRun();
+        return;
+      }
       LAST = d.posts || [];
       // After navigating away the "grid" on screen belongs to some other page.
       var ok =
         LAST.length && d.reason !== "navigated"
-          ? renderSorted(LAST, d.sortBy, d.ranked, d.median)
+          ? renderSorted(LAST, d.sortBy, d.ranked, d.median, d.days)
           : false;
       try {
         chrome.storage.local.set({ lastRun: { count: LAST.length, sortBy: d.sortBy, ts: Date.now() } });
@@ -1024,17 +1357,27 @@
     }
 
     if (msg.type === "startSort") {
+      // days and maxReels are set on a Free run only: how far back it reaches
+      // and how many reels it keeps. The collector enforces both.
+      var days = msg.days > 0 ? msg.days : null;
+      var maxReels = msg.maxReels > 0 ? msg.maxReels : null;
+      var limit = maxReels && (msg.limit === "all" || msg.limit > maxReels) ? maxReels : msg.limit;
+      if (msg.tabId !== undefined) TAB_ID = msg.tabId;
+      RUN_PROFILE = ownerHere();
       saveSortState({
         status: "running",
         sortBy: msg.sortBy,
         collected: 0,
-        target: msg.limit === "all" ? null : msg.limit,
+        target: limit === "all" ? null : limit,
+        days: days,
         message: "Reloading and collecting reels\u2026"
       });
       try {
         sessionStorage.setItem(
           "igSorterJob",
-          JSON.stringify({ sortBy: msg.sortBy, limit: msg.limit })
+          JSON.stringify({
+            sortBy: msg.sortBy, limit: limit, days: days, maxReels: maxReels, tabId: TAB_ID
+          })
         );
       } catch (e) {}
       sendResponse({ ok: true });
@@ -1074,7 +1417,10 @@
     }
 
     if (msg.type === "ping") {
-      sendResponse({ ok: true, have: LAST.length });
+      // have: reels to export; sorted: the sorted grid is up, to restore.
+      sendResponse({
+        ok: true, have: LAST.length, sorted: !!document.getElementById(WRAP_ID), loadId: LOAD_ID
+      });
       return true;
     }
     return true;

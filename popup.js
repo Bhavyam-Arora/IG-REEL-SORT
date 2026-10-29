@@ -14,6 +14,79 @@ function working(on) {
   $("go").disabled = !!on;
 }
 
+function exportsEnabled(on) {
+  $("csv").disabled = !on;
+  $("json").disabled = !on;
+  $("xlsx").disabled = !on;
+}
+
+// ---- Plan ----
+// The worker decides (isPro in lib/auth.js); the popup only shows what it
+// says. Until it answers, treat this as Free: the sort click asks again anyway.
+// Free sees Pro's choices in both menus, greyed out, marked Pro, and can't pick
+// them.
+var PRO_SORTS = { outlier: 1, outlierLikes: 1, outlierComments: 1 };
+// Where a Pro-only sort lands on Free: the same metric, without the score.
+var FREE_SORT = { outlier: "views", outlierLikes: "likes", outlierComments: "comments" };
+// freeMaxReels is the worker's FREE_MAX_REELS; this is it until it answers.
+var plan = { pro: false, freeDays: null, freeMaxReels: 50 };
+
+// Pro's default depth is the one popup.html selects. Free's is the deepest it
+// may choose. Either only until the depth is picked by hand.
+var PRO_LIMIT = $("limit").value;
+var limitPicked = false;
+
+$("limit").addEventListener("change", function () { limitPicked = true; });
+
+// cb gets the worker's answer, or null when it didn't give one.
+function getPlan(cb) {
+  chrome.runtime.sendMessage({ type: "plan" }, function (res) {
+    cb(chrome.runtime.lastError || !res || !res.ok ? null : res.plan);
+  });
+}
+
+function freeDepth(value) {
+  return value !== "all" && parseInt(value, 10) <= plan.freeMaxReels;
+}
+
+// Grey out, and mark, what this plan can't choose.
+function lockOptions(select, freeOk) {
+  select.querySelectorAll("option").forEach(function (o) {
+    if (!o.hasAttribute("data-label")) o.setAttribute("data-label", o.textContent);
+    var locked = !plan.pro && !freeOk(o.value);
+    o.disabled = locked;
+    o.textContent = o.getAttribute("data-label") + (locked ? " \u2014 Pro" : "");
+  });
+}
+
+function deepestFreeLimit() {
+  var best = null;
+  $("limit").querySelectorAll("option").forEach(function (o) {
+    if (freeDepth(o.value)) best = o.value;
+  });
+  return best;
+}
+
+// Run on every plan answer: sign-in, sign-out, the plan loading. A choice the
+// plan no longer allows falls back to one it does.
+function applyPlan(p) {
+  plan = {
+    pro: !!p.pro,
+    freeDays: p.freeDays || null,
+    freeMaxReels: p.freeMaxReels || plan.freeMaxReels
+  };
+  lockOptions($("sortBy"), function (v) { return !PRO_SORTS[v]; });
+  lockOptions($("limit"), freeDepth);
+
+  if (!plan.pro && PRO_SORTS[$("sortBy").value]) $("sortBy").value = FREE_SORT[$("sortBy").value];
+  if (!limitPicked) $("limit").value = plan.pro ? PRO_LIMIT : deepestFreeLimit();
+  else if (!plan.pro && !freeDepth($("limit").value)) $("limit").value = deepestFreeLimit();
+
+  $("upgrade").hidden = plan.pro;
+}
+
+applyPlan(plan);
+
 function activeTab(cb) {
   chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
     cb(tabs && tabs[0]);
@@ -45,90 +118,133 @@ function wrongPageMessage(kind) {
 }
 
 function showPage(url) {
-  var page = pageKind(url);
-  here = page.kind === "reelsTab" ? page.owner : null;
-  $("pageNote").textContent = here ? "" : wrongPageMessage(page.kind);
+  var kind = pageKind(url);
+  here = kind.kind === "reelsTab" ? kind.owner : null;
+  $("pageNote").textContent = here ? "" : wrongPageMessage(kind.kind);
   $("pageNote").hidden = !!here;
-  return page;
+  return kind;
 }
 
 // ---- Sort state ----
 // content.js keeps the run's state in storage, so it survives the popup
-// closing. A "running" state that's stopped updating belongs to a tab that was
-// closed or reloaded mid-run. The collector checks in every scroll, but a
-// background tab's timers can be throttled to once a minute.
+// closing. Each state is stamped with the tab, profile and page load it
+// belongs to, and shows only on that same page: never another tab's run,
+// another profile's, or one from before the page last loaded. The worker and
+// content.js clear it when that page goes.
+//
+// Running, it shows progress. Finished, it shows nothing unless something went
+// wrong on this page: the sorted grid is the result.
+//
+// A "running" state that's stopped updating is a run that died without saying
+// so (the collector checks in every scroll); it shows nothing and doesn't hold
+// the Sort button.
 var STALE_MS = 90 * 1000;
 
-function showSortState(s) {
-  if (!s) {
-    setStatus(here ? "Ready to sort @" + here + "'s reels." : "");
-    return;
-  }
-  var stale = s.status === "running" && Date.now() - (s.updatedAt || 0) > STALE_MS;
-  var mine = s.profile && here && s.profile.toLowerCase() === here;
-  var text = stale ? "Sort interrupted \u2014 the tab was closed or reloaded." : s.message;
-  setStatus("@" + s.profile + " \u00b7 " + text, stale ? "bad" : s.tone || null);
-  working(s.status === "running" && !stale && mine);
+// The active tab, and the page load its content script answered from.
+var page = { tabId: null, loadId: null };
+
+function onThisPage(s) {
+  return !!(s && here && s.tabId === page.tabId && s.loadId === page.loadId && s.profile === here);
 }
 
-function readSortState() {
-  chrome.storage.local.get({ sortState: null }, function (o) {
-    showSortState(o.sortState);
+function showSortState(s) {
+  if (!onThisPage(s)) {
+    setStatus("");
+    working(false);
+    return;
+  }
+  var running = s.status === "running" && Date.now() - (s.updatedAt || 0) <= STALE_MS;
+  working(running);
+  if (running) setStatus(s.message);
+  else setStatus(s.warning || "", "bad");
+}
+
+// Asks the page which load it is and whether it has sorted reels. Without an
+// answer (it's mid-reload, or has no content script) nothing changes.
+function pingPage(cb) {
+  send(page.tabId, { type: "ping" }, function (res) {
+    if (res) {
+      page.loadId = res.loadId || null;
+      exportsEnabled(res.have > 0);
+      $("restore").hidden = !res.sorted;
+    }
+    cb();
   });
 }
 
-// On open: say straight away whether this page can be sorted, show the last
-// run, and ask the page whether it already has sorted results to export.
+// Asked again on every change: a sort reloads the page, which makes it a new
+// load, and a finished one has reels to export.
+function followSortState(s) {
+  if (!here) {
+    showSortState(null);
+    return;
+  }
+  pingPage(function () { showSortState(s); });
+}
+
+// On open: say straight away whether this page can be sorted, then show this
+// page's run, if it has one.
 activeTab(function (tab) {
+  page.tabId = tab ? tab.id : null;
   showPage(tab && tab.url);
-  readSortState();
-  if (!tab || !here) return;
-  send(tab.id, { type: "ping" }, function (res) {
-    if (res && res.have > 0) {
-      $("csv").disabled = false;
-      $("json").disabled = false;
-      $("restore").hidden = false;
-    }
+  chrome.storage.local.get({ sortState: null }, function (o) {
+    followSortState(o.sortState);
   });
 });
 
 chrome.storage.onChanged.addListener(function (changes, area) {
   if (area !== "local" || !changes.sortState) return;
-  var s = changes.sortState.newValue;
-  showSortState(s);
-  if (s && s.status !== "running" && s.count > 0 && s.profile && s.profile.toLowerCase() === here) {
-    $("csv").disabled = false;
-    $("json").disabled = false;
-    $("restore").hidden = false;
-  }
+  followSortState(changes.sortState.newValue);
 });
 
 $("go").addEventListener("click", function () {
   activeTab(function (tab) {
     // Re-checked on click: the tab may have moved since the popup opened.
     // Anywhere but a Reels tab, nothing is reloaded or scrolled.
-    var page = showPage(tab && tab.url);
-    if (!tab || page.kind !== "reelsTab") return;
-    var sortBy = $("sortBy").value;
-    working(true);
-    $("csv").disabled = true;
-    $("json").disabled = true;
+    page.tabId = tab ? tab.id : null;
+    var kind = showPage(tab && tab.url);
+    if (!tab || kind.kind !== "reelsTab") return;
 
-    // "all" travels as a string; the collector turns it into an open-ended run
-    // that stops when the profile runs out of reels.
-    var limitRaw = $("limit").value;
-    var limit = limitRaw === "all" ? "all" : parseInt(limitRaw, 10);
-
-    send(
-      tab.id,
-      { type: "startSort", sortBy: sortBy, limit: limit },
-      function (res, err) {
-        if (err) {
-          working(false);
-          setStatus("Reload the Instagram tab, then try again.", "bad");
-        }
+    // Asked fresh: the plan may have changed since the popup opened.
+    getPlan(function (p) {
+      // Without an answer there's no telling what this run may reach.
+      if (!p) {
+        setStatus("Extension worker unavailable \u2014 reload the extension.", "bad");
+        return;
       }
-    );
+      // Moves any choice the plan doesn't allow back to one it does.
+      applyPlan(p);
+      var sortBy = $("sortBy").value;
+
+      working(true);
+      exportsEnabled(false);
+      setStatus("");
+
+      // "all" travels as a string; the collector turns it into an open-ended
+      // run that stops when the profile runs out of reels.
+      var limitRaw = $("limit").value;
+      var limit = limitRaw === "all" ? "all" : parseInt(limitRaw, 10);
+
+      send(
+        tab.id,
+        // days and maxReels limit a Free run to its recent reels, and to so
+        // many of them; Pro has neither. tabId ties the run to this tab.
+        {
+          type: "startSort",
+          sortBy: sortBy,
+          limit: limit,
+          days: plan.pro ? null : plan.freeDays,
+          maxReels: plan.pro ? null : plan.freeMaxReels,
+          tabId: tab.id
+        },
+        function (res, err) {
+          if (err) {
+            working(false);
+            setStatus("Reload the Instagram tab, then try again.", "bad");
+          }
+        }
+      );
+    });
   });
 });
 
@@ -162,17 +278,15 @@ chrome.storage.onChanged.addListener(function (changes, area) {
 function doExport(kind) {
   activeTab(function (tab) {
     send(tab.id, { type: "export", kind: kind }, function (res, err) {
-      if (err || !res || !res.ok) {
-        setStatus("Nothing to export yet. Run a sort first.", "bad");
-        return;
-      }
-      setStatus("Exported " + res.count + " reels as " + kind.toUpperCase() + ".", "good");
+      // The download is the confirmation; only a failure says anything.
+      if (err || !res || !res.ok) setStatus("Nothing to export on this page. Run a sort first.", "bad");
     });
   });
 }
 
 $("csv").addEventListener("click", function () { doExport("csv"); });
 $("json").addEventListener("click", function () { doExport("json"); });
+$("xlsx").addEventListener("click", function () { doExport("xlsx"); });
 
 // ---- Account ----
 // Left over from bring-your-own-key: transcription now runs on Sortcut's key,
@@ -190,6 +304,11 @@ function fmtDate(iso) {
   });
 }
 
+// 3,000 rather than 3000. Always commas: the rest of the popup is English.
+function fmtCount(n) {
+  return typeof n === "number" && isFinite(n) ? n.toLocaleString("en-US") : String(n);
+}
+
 function accountNote(text) {
   $("accountNote").textContent = text || "";
   $("accountNote").hidden = !text;
@@ -200,19 +319,21 @@ function renderAccount(a) {
   $("signedOut").hidden = signedIn;
   $("signedIn").hidden = !signedIn;
   accountNote(a && a.error);
+  applyPlan(a || {});
   if (!signedIn) return;
 
   var me = a.me || {};
-  var pro = me.plan === "pro_monthly" || me.plan === "pro_yearly";
+  var pro = !!a.pro;
   $("email").textContent = me.email || "";
-  $("plan").textContent = a.me ? PLAN_LABEL[me.plan] || "Free" : "";
-  $("upgrade").hidden = !a.me || pro;
+  // a.plan is the worker's answer, which outlasts /v1/me being unreachable.
+  $("plan").textContent = PLAN_LABEL[a.plan] || "Free";
 
   var q = me.quota;
   var usage = "";
   if (pro && q) {
     var resets = fmtDate(q.periodEnd || me.periodEnd);
-    usage = q.used + " of " + q.limit + " transcripts used" + (resets ? " \u00b7 resets " + resets : "");
+    usage = fmtCount(q.used) + " of " + fmtCount(q.limit) + " transcripts used" +
+      (resets ? " \u00b7 resets " + resets : "");
   }
   $("usage").textContent = usage;
   $("usage").hidden = !usage;
@@ -282,7 +403,6 @@ $("debugSample").addEventListener("click", function () {
 $("restore").addEventListener("click", function () {
   activeTab(function (tab) {
     send(tab.id, { type: "restore" }, function () {
-      setStatus("Original grid restored.");
       $("restore").hidden = true;
     });
   });

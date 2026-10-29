@@ -162,6 +162,20 @@ function createDocument() {
     set href(v) { this.setAttribute("href", v); }
     get title() { return this.getAttribute("title") || ""; }
     set title(v) { this.setAttribute("title", v); }
+    // A <select>'s value is its chosen <option>'s until something sets it.
+    get value() {
+      if (this._value !== undefined) return this._value;
+      if (this.tagName === "OPTION") return this.getAttribute("value") ?? this.textContent;
+      if (this.tagName === "SELECT") {
+        const opts = this.querySelectorAll("option");
+        const chosen = opts.find((o) => o.hasAttribute("selected")) || opts[0];
+        return chosen ? chosen.value : "";
+      }
+      return "";
+    }
+    set value(v) { this._value = String(v); }
+    get disabled() { return this.hasAttribute("disabled"); }
+    set disabled(v) { v ? this.setAttribute("disabled", "") : this.removeAttribute("disabled"); }
     get hidden() { return this.hasAttribute("hidden"); }
     set hidden(v) { v ? this.setAttribute("hidden", "") : this.removeAttribute("hidden"); }
     get textContent() { return this._text + this.children.map((c) => c.textContent).join(""); }

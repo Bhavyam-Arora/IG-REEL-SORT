@@ -151,10 +151,17 @@
   //    Instagram has changed something; scrolling longer won't help.
   //  - STALL: reels were arriving and then stopped.
   //  - TIME_LIMIT: a backstop for everything else, e.g. nothing arriving at all.
+  //  - PAST_RANGE: a Free run (job.days) has scrolled past its date range.
   var NO_REELS_SCROLLS = 10;
   var STALL_SCROLLS = 25;
   var TIME_LIMIT_MS = 3 * 60 * 1000;
   var TIME_LIMIT_ALL_MS = 10 * 60 * 1000;
+
+  // The Reels tab lists newest first, except for up to three pinned reels at
+  // the top, which can be any age. So the first old reel may just be a pin;
+  // one more old reel than can be pinned means the range is behind us.
+  var MAX_PINNED = 3;
+  var DAY_MS = 24 * 60 * 60 * 1000;
 
   async function run(job) {
     var lib = window.__IG_SORTER_REELS__;
@@ -165,17 +172,28 @@
     // UI sees — Infinity is not JSON, and "of Infinity" would be a nonsense
     // progress line anyway.
     var target = job.limit === "all" ? Infinity : job.limit || 100;
+    // A Free run keeps at most job.maxReels, whatever depth was asked for: the
+    // popup's Depth menu is not the only thing standing between Free and more.
+    if (job.maxReels > 0) target = Math.min(target, job.maxReels);
     var reported = isFinite(target) ? target : null;
     var limitMs = isFinite(target) ? TIME_LIMIT_MS : TIME_LIMIT_ALL_MS;
     var started = Date.now();
     var reason = null;
+
+    // A Free run counts only reels from the last job.days days. A reel whose
+    // date can't be read can't be shown to be in range, so it doesn't count.
+    var days = job.days > 0 ? job.days : null;
+    var since = days ? started - days * DAY_MS : null;
+    var inRange = function (p) {
+      return since === null || (p.createdAt !== null && p.createdAt !== undefined && ts(p) >= since);
+    };
 
     // The popup only starts a job on a Reels tab, so this is a backstop: never
     // scroll anything else.
     if (!owner) {
       clearJob();
       post("result", {
-        posts: [], ranked: 0, median: null, sortBy: job.sortBy, target: reported,
+        posts: [], ranked: 0, median: null, sortBy: job.sortBy, target: reported, days: days,
         total: 0, hits: 0, unreadable: 0, reason: "wrong_page", limitMs: limitMs, elapsedMs: 0
       });
       return;
@@ -193,13 +211,20 @@
         break;
       }
 
-      var count = collected(owner).length;
+      // seen is every reel of this profile's that has arrived; count is the
+      // ones the run keeps, which on Pro is all of them.
+      var seen = collected(owner);
+      var count = seen.filter(inRange).length;
       if (count >= target) {
         reason = "complete";
         break;
       }
-      if (count > 0 && window.__IG_SORTER_PAGEINFO__.hasNextPage === false) {
+      if (seen.length > 0 && window.__IG_SORTER_PAGEINFO__.hasNextPage === false) {
         reason = "end";
+        break;
+      }
+      if (seen.length - count > MAX_PINNED) {
+        reason = "past_range";
         break;
       }
       if (Date.now() - started >= limitMs) {
@@ -207,7 +232,7 @@
         break;
       }
 
-      if (count === 0) {
+      if (seen.length === 0) {
         // Only scrolls during which Instagram actually answered count here; a
         // slow first load is the time limit's business.
         var responses = window.__IG_SORTER_RESPONSES__ || 0;
@@ -217,7 +242,7 @@
           reason = "no_reels";
           break;
         }
-      } else if (count === last) {
+      } else if (seen.length === last) {
         if (++stagnant >= STALL_SCROLLS) {
           reason = "stalled";
           break;
@@ -225,7 +250,7 @@
       } else {
         stagnant = 0;
       }
-      last = count;
+      last = seen.length;
 
       // Sent every scroll, not just when the count moves: it doubles as the
       // heartbeat that tells the popup this run is still alive.
@@ -233,6 +258,7 @@
         collected: count,
         target: reported,
         sortBy: job.sortBy,
+        days: days,
         elapsedMs: Date.now() - started,
         limitMs: limitMs
       });
@@ -244,12 +270,13 @@
       await wait(900);
     }
 
-    var all = collected(owner);
+    var seenAll = collected(owner);
+    var all = seenAll.filter(inRange);
     var result = rankPosts(all, job.sortBy, target);
 
     if (reason !== "navigated") window.scrollTo(0, 0);
 
-    if (all.length === 0) {
+    if (seenAll.length === 0) {
       post("healthAlert", {
         reason: "zero_posts_captured",
         stop: reason,
@@ -266,7 +293,10 @@
       median: result.median,
       sortBy: job.sortBy,
       target: reported,
+      days: days,
       total: all.length,
+      // Including any outside a Free run's range.
+      seen: seenAll.length,
       hits: window.__IG_SORTER_HITS__ || 0,
       unreadable: window.__IG_SORTER_UNREADABLE__ || 0,
       reason: reason,

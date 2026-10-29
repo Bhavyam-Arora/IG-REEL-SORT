@@ -49,6 +49,7 @@
     <div class="exports">
       <button id="csv" class="ghost" disabled>Export CSV</button>
       <button id="json" class="ghost" disabled>Export JSON</button>
+      <button id="xlsx" class="ghost" disabled>Export Excel</button>
     </div>
 
     <button id="restore" class="link" hidden>Restore original grid</button>
@@ -64,9 +65,10 @@
           <span id="plan" class="plan"></span>
         </div>
         <p id="usage" class="dim" hidden></p>
-        <a id="upgrade" class="upgrade" href="https://sortcut.co/pricing.html" target="_blank" rel="noopener" hidden>Upgrade to Pro</a>
         <button id="signOut" class="link">Sign out</button>
       </div>
+      <!-- The popup's one way to Pro, for anyone not on it, signed in or not. -->
+      <a id="upgrade" class="upgrade" href="https://sortcut.co/pricing.html" target="_blank" rel="noopener" hidden>Upgrade to Pro</a>
       <p id="accountNote" class="dim" role="status" hidden></p>
     </section>
 

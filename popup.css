@@ -101,6 +101,8 @@ select {
   cursor: pointer;
   appearance: none;
 }
+/* Pro choices on Free: still listed, greyed out and not selectable. */
+option:disabled { color: var(--muted); }
 select:focus-visible,
 button:focus-visible {
   outline: 2px solid var(--signal);
@@ -140,6 +142,8 @@ button { font-family: var(--sans); cursor: pointer; }
 .status.bad  { color: #F08A7A; border-color: rgba(240,138,122,.42); }
 
 .exports { display: flex; gap: 7px; }
+/* Three across in a 296px panel: tighter sides so "Export Excel" fits. */
+.exports .ghost { padding: 8px 4px; white-space: nowrap; }
 .ghost {
   flex: 1;
   padding: 8px;
@@ -202,18 +206,14 @@ button { font-family: var(--sans); cursor: pointer; }
   color: var(--signal);
 }
 .upgrade {
-  display: block;
-  margin-top: 9px;
-  padding: 8px;
-  border: 1px solid rgba(232,163,61,.42);
-  border-radius: 8px;
+  display: inline-block;
+  margin-top: 8px;
   color: var(--signal);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
-  text-align: center;
   text-decoration: none;
 }
-.upgrade:hover { background: var(--surface); }
+.upgrade:hover { text-decoration: underline; }
 .upgrade:focus-visible {
   outline: 2px solid var(--signal);
   outline-offset: 2px;

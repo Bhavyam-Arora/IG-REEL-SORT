@@ -174,6 +174,22 @@ function errorText(res) {
   return msg || "Something went wrong (HTTP " + res.status + "). Please try again.";
 }
 
+var NEEDS_PRO = "Transcription is part of Sortcut Pro.";
+
+// The page answers this one with its Upgrade dialog rather than a failure card.
+function needsProError() {
+  var err = new Error(NEEDS_PRO);
+  err.needsPro = true;
+  return err;
+}
+
+// A refused call. The backend has the last word on the plan: a 402 that isn't
+// about used-up transcripts means the account isn't Pro, whatever we last saw.
+function apiError(res) {
+  if (res.status === 402 && !/used all/i.test(serverMessage(res))) return needsProError();
+  return new Error(errorText(res));
+}
+
 // The backend refunds a no-speech failure, so it gets its own plain wording.
 var NO_SPEECH = "No speech was detected in this reel. No credit was used.";
 
@@ -261,7 +277,7 @@ async function waitForJob(jobId, status, tell) {
       continue; // a dropped poll costs nothing; the job carries on
     }
     if (res.status >= 500) continue;
-    if (!res.ok) throw new Error(errorText(res));
+    if (!res.ok) throw apiError(res);
 
     var job = res.data || {};
     if (job.status === "done") return transcriptOf(job);
@@ -277,10 +293,13 @@ async function run(post, tell) {
   // opens only from that dialog's button (pageSignIn below), never straight
   // from a Transcribe click.
   if (!(await getAuth())) throw signedOutError("You need to be signed in first.");
+  // Signed in on Free: the page shows its Upgrade dialog. Checked here only so
+  // the answer is clear and immediate; the backend enforces it regardless.
+  if (!(await isPro())) throw needsProError();
 
   tell("Transcribing…");
   var res = await api("/v1/transcriptions", { method: "POST", body: { reelCode: post.code } });
-  if (!res.ok) throw new Error(errorText(res));
+  if (!res.ok) throw apiError(res);
   var job = res.data || {};
 
   // Transcribed before and still cached: free, and no download at all.
@@ -302,7 +321,7 @@ async function run(post, tell) {
     var sub = await api("/v1/transcriptions/" + encodeURIComponent(job.jobId) + "/submit", {
       method: "POST"
     });
-    if (!sub.ok) throw new Error(errorText(sub));
+    if (!sub.ok) throw apiError(sub);
     // The credit is charged at submit, so the popup's usage line is now stale.
     await clearMeCache();
     // Keep polling the job this click created; only its status comes from
@@ -329,14 +348,41 @@ function progressTo(sender, code) {
   };
 }
 
+// What the plan unlocks, for the popup and the page. Free sorts reach back
+// FREE_DAYS; Pro has the full history, the outlier sorts and transcription.
+async function planInfo() {
+  var plan = await currentPlan();
+  return { plan: plan, pro: PRO_PLANS[plan] === 1, freeDays: FREE_DAYS, freeMaxReels: FREE_MAX_REELS };
+}
+
+// ---- Sort state ----
+// content.js stamps the popup's sort state with the tab and page load it
+// belongs to. Only this side knows a tab's id, and only this side hears a tab
+// close, so ending the state on a new page load or a closed tab happens here.
+async function dropSortState(tabId, keepLoad) {
+  var s = (await chrome.storage.local.get({ sortState: null })).sortState;
+  if (s && s.tabId === tabId && s.loadId !== keepLoad) await chrome.storage.local.remove("sortState");
+}
+
+chrome.tabs.onRemoved.addListener(function (tabId) {
+  dropSortState(tabId, null).catch(function () {});
+});
+
 async function account() {
-  if (!(await getAuth())) return { signedIn: false };
-  try {
-    return { signedIn: true, me: await getMe() };
-  } catch (e) {
-    if (e.signedOut) return { signedIn: false, error: e.message };
-    return { signedIn: true, me: null, error: e.message };
+  var a;
+  if (!(await getAuth())) {
+    a = { signedIn: false };
+  } else {
+    try {
+      a = { signedIn: true, me: await getMe() };
+    } catch (e) {
+      a = e.signedOut
+        ? { signedIn: false, error: e.message }
+        : { signedIn: true, me: null, error: e.message };
+    }
   }
+  // When getMe answered, it's cached, so this costs no second request.
+  return Object.assign(a, await planInfo());
 }
 
 function reply(promise, sendResponse, wrap) {
@@ -348,7 +394,8 @@ function reply(promise, sendResponse, wrap) {
       sendResponse({
         ok: false,
         error: err && err.message ? err.message : String(err),
-        signedOut: !!(err && err.signedOut)
+        signedOut: !!(err && err.signedOut),
+        needsPro: !!(err && err.needsPro)
       });
     }
   );
@@ -364,7 +411,7 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     // where the service-worker console shows it, with any detail that doesn't
     // belong in the on-page text.
     var job = run(msg.post, tell).catch(function (err) {
-      if (!(err && err.signedOut)) {
+      if (!(err && (err.signedOut || err.needsPro))) {
         console.warn("[GridSorter] transcription failed", code, "—", err && err.message,
           err && err.detail ? "(" + err.detail + ")" : "");
       }
@@ -379,10 +426,21 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
   if (msg.type === "pageSignIn") {
     return reply(signIn(), sendResponse, function () { return { ok: true }; });
   }
+  // Every page load in an Instagram tab. A load that carries on a sort the
+  // popup just started (keep) re-stamps the state itself; any other load ends
+  // the one the tab had.
+  if (msg.type === "pageLoad") {
+    var tabId = sender.tab ? sender.tab.id : null;
+    var done = msg.keep || tabId === null ? Promise.resolve() : dropSortState(tabId, msg.loadId);
+    return reply(done, sendResponse, function () { return { ok: true, tabId: tabId }; });
+  }
   // From the popup. Sign-in runs here rather than in the popup because the
   // Google window takes focus and closes the popup mid-flow.
   var asAccount = function (a) { return { ok: true, account: a }; };
   if (msg.type === "account") return reply(account(), sendResponse, asAccount);
+  if (msg.type === "plan") {
+    return reply(planInfo(), sendResponse, function (p) { return { ok: true, plan: p }; });
+  }
   if (msg.type === "signIn") return reply(signIn().then(account), sendResponse, asAccount);
   if (msg.type === "signOut") return reply(signOut().then(account), sendResponse, asAccount);
   return false;
