@@ -141,9 +141,11 @@ button { font-family: var(--sans); cursor: pointer; }
 .status.good { color: var(--signal); border-color: rgba(232,163,61,.42); }
 .status.bad  { color: #F08A7A; border-color: rgba(240,138,122,.42); }
 
-.exports { display: flex; gap: 7px; }
-/* Three across in a 296px panel: tighter sides so "Export Excel" fits. */
-.exports .ghost { padding: 8px 4px; white-space: nowrap; }
+/* Three across in a 296px panel, tighter sides so "Export Excel" fits, and
+   Google Sheets on its own row: its label can't fit a third or half of it. */
+.exports { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
+.exports .ghost { padding: 8px 4px; white-space: nowrap; min-width: 0; }
+.exports .wide { grid-column: 1 / -1; }
 .ghost {
   flex: 1;
   padding: 8px;

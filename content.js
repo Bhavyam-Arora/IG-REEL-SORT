@@ -859,11 +859,18 @@
       return;
     }
 
+    // BOM so Excel reads UTF-8 captions correctly.
+    download(profileSlug() + "-sorted.csv", "\uFEFF" + csvText(cols, LAST), "text/csv");
+  }
+
+  // The CSV export's text, without the BOM. Google Sheets gets the very same
+  // text through the worker, so the two can't disagree on columns or format.
+  function csvText(cols, posts) {
     var esc = function (v) {
       return '"' + String(v === null || v === undefined ? "" : v).replace(/"/g, '""') + '"';
     };
     var rows = [cols.join(",")];
-    LAST.forEach(function (p) {
+    posts.forEach(function (p) {
       rows.push(
         cols
           .map(function (c) {
@@ -874,8 +881,7 @@
           .join(",")
       );
     });
-    // BOM so Excel reads UTF-8 captions correctly.
-    download(profileSlug() + "-sorted.csv", "\uFEFF" + rows.join("\r\n"), "text/csv");
+    return rows.join("\r\n");
   }
 
   // The CSV's and the Excel file's columns, in order.
@@ -1389,6 +1395,17 @@
     if (msg.type === "export") {
       exportData(msg.kind);
       sendResponse({ ok: LAST.length > 0, count: LAST.length });
+      return true;
+    }
+
+    // From the worker, for Export to Google Sheets: the CSV export's text and
+    // whose reels they are. Nothing is downloaded here.
+    if (msg.type === "sheetsCsv") {
+      sendResponse(
+        LAST.length
+          ? { ok: true, csv: csvText(exportColumns(LAST), LAST), username: profileSlug(), count: LAST.length }
+          : { ok: false }
+      );
       return true;
     }
 

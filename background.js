@@ -368,6 +368,141 @@ chrome.tabs.onRemoved.addListener(function (tabId) {
   dropSortState(tabId, null).catch(function () {});
 });
 
+// ---- Export to Google Sheets ----
+// The CSV export's text, uploaded to the user's Drive with the instruction to
+// convert it into a Google Sheet: one multipart request, no Sheets API, and
+// the data never passes through Sortcut (decisions.md §12).
+//
+// The export, and then its outcome, is kept in session storage under the tab
+// it came from. The popup closes as soon as Google's window takes focus, so
+// this record is what carries the export across that window, and what the
+// popup shows when it's opened again.
+var SHEETS_KEY = "sheetsExport"; // chrome.storage.session: { status, tabId, at, message?, csvFallback? }
+var DRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart";
+
+function sheetsState(s) {
+  return chrome.storage.session.set({ [SHEETS_KEY]: Object.assign({ at: Date.now() }, s) });
+}
+
+// A failure the user can still get their data out of, as a CSV download.
+function sheetsFailed(message) {
+  var err = new Error(message);
+  err.csvFallback = true;
+  return err;
+}
+
+// The sorted reels live on the Instagram tab; signing in never reloads it.
+async function sheetCsv(tabId) {
+  var r;
+  try {
+    r = await chrome.tabs.sendMessage(tabId, { type: "sheetsCsv" });
+  } catch (e) {
+    throw new Error("Open the Instagram tab you sorted, then try again.");
+  }
+  if (!r || !r.ok || typeof r.csv !== "string") {
+    throw new Error("Nothing to export on this page. Run a sort first.");
+  }
+  return r;
+}
+
+function localDate() {
+  var d = new Date();
+  var two = function (n) { return (n < 10 ? "0" : "") + n; };
+  return d.getFullYear() + "-" + two(d.getMonth() + 1) + "-" + two(d.getDate());
+}
+
+// Returns { status, id } for any answer; throws only when there was none.
+async function uploadSheet(token, name, csv) {
+  var boundary = "sortcut-" + crypto.randomUUID();
+  var meta = { name: name, mimeType: "application/vnd.google-apps.spreadsheet" };
+  var body =
+    "--" + boundary + "\r\n" +
+    "Content-Type: application/json; charset=UTF-8\r\n\r\n" +
+    JSON.stringify(meta) + "\r\n" +
+    "--" + boundary + "\r\n" +
+    "Content-Type: text/csv; charset=UTF-8\r\n\r\n" +
+    csv + "\r\n" +
+    "--" + boundary + "--";
+  var res;
+  try {
+    res = await fetch(DRIVE_UPLOAD, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + token,
+        "Content-Type": "multipart/related; boundary=" + boundary
+      },
+      body: body
+    });
+  } catch (e) {
+    throw sheetsFailed("Couldn't reach Google Drive. Check your connection and try again.");
+  }
+  var data = await res.json().catch(function () { return null; });
+  return { status: res.status, id: res.ok && data && typeof data.id === "string" ? data.id : null };
+}
+
+async function runSheetsExport(tabId) {
+  await sheetsState({ status: "waiting", tabId: tabId });
+  var token = await driveToken(false);
+
+  // The export pending across Google's window: run it now the token is here.
+  var pending = (await chrome.storage.session.get(SHEETS_KEY))[SHEETS_KEY];
+  if (pending && typeof pending.tabId === "number") tabId = pending.tabId;
+  await sheetsState({ status: "uploading", tabId: tabId });
+
+  var page = await sheetCsv(tabId);
+  var name = "@" + page.username + " reels \u00b7 Sortcut \u00b7 " + localDate();
+  var up = await keepAlive(function () { return uploadSheet(token, name, page.csv); });
+  // Expired, or the permission was taken back: a new token once, then once more.
+  if (up.status === 401 || up.status === 403) {
+    token = await driveToken(true);
+    up = await keepAlive(function () { return uploadSheet(token, name, page.csv); });
+  }
+  if (!up.id) {
+    throw sheetsFailed("Google Sheets didn't accept the export (HTTP " + up.status + ").");
+  }
+
+  var url = "https://docs.google.com/spreadsheets/d/" + encodeURIComponent(up.id) + "/edit";
+  await chrome.tabs.create({ url: url });
+  await sheetsState({ status: "done", tabId: tabId });
+  return url;
+}
+
+// One export at a time: a second click while Google's window is open joins
+// the first rather than opening another.
+var exportingSheet = null;
+
+function exportToSheets(tabId) {
+  if (!exportingSheet) {
+    exportingSheet = runSheetsExport(tabId)
+      .catch(async function (err) {
+        await sheetsState({
+          status: "failed",
+          tabId: tabId,
+          message: err && err.message ? err.message : String(err),
+          csvFallback: !!(err && err.csvFallback)
+        });
+        throw err;
+      })
+      .finally(function () {
+        exportingSheet = null;
+      });
+  }
+  return exportingSheet;
+}
+
+// A worker that starts up can't be the one waiting on Google: an export left
+// waiting or uploading belonged to a worker that was stopped mid-way.
+chrome.storage.session.get(SHEETS_KEY).then(function (o) {
+  var s = o && o[SHEETS_KEY];
+  if (exportingSheet || !s || (s.status !== "waiting" && s.status !== "uploading")) return;
+  return sheetsState({
+    status: "failed",
+    tabId: s.tabId,
+    message: "The export to Google Sheets was interrupted. Please try again.",
+    csvFallback: true
+  });
+}).catch(function () {});
+
 async function account() {
   var a;
   if (!(await getAuth())) {
@@ -442,6 +577,11 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     return reply(planInfo(), sendResponse, function (p) { return { ok: true, plan: p }; });
   }
   if (msg.type === "signIn") return reply(signIn().then(account), sendResponse, asAccount);
+  // Answered when the sheet is open, or failed. The popup has usually closed
+  // by then; it reads the outcome from session storage instead.
+  if (msg.type === "sheetsExport") {
+    return reply(exportToSheets(msg.tabId), sendResponse, function (url) { return { ok: true, url: url }; });
+  }
   if (msg.type === "signOut") return reply(signOut().then(account), sendResponse, asAccount);
   return false;
 });

@@ -18,6 +18,7 @@ function exportsEnabled(on) {
   $("csv").disabled = !on;
   $("json").disabled = !on;
   $("xlsx").disabled = !on;
+  $("sheets").disabled = !on;
 }
 
 // ---- Plan ----
@@ -287,6 +288,53 @@ function doExport(kind) {
 $("csv").addEventListener("click", function () { doExport("csv"); });
 $("json").addEventListener("click", function () { doExport("json"); });
 $("xlsx").addEventListener("click", function () { doExport("xlsx"); });
+
+// ---- Google Sheets ----
+// The worker runs the export, Google's window included, because that window
+// closes the popup. It keeps the export's progress and outcome in session
+// storage for the tab it came from; the popup shows it for that tab only.
+var SHEETS_TEXT = {
+  waiting: "Waiting for Google\u2026",
+  uploading: "Exporting to Google Sheets\u2026",
+  done: "Opened in Google Sheets."
+};
+
+function showSheets(s) {
+  var show = !!(s && s.tabId === page.tabId && Date.now() - (s.at || 0) < TX_FRESH_MS);
+  var failed = show && s.status === "failed";
+  var text = !show ? "" : failed ? s.message : SHEETS_TEXT[s.status] || "";
+  $("sheetsStatus").textContent = text;
+  $("sheetsStatus").hidden = !text;
+  $("sheetsStatus").classList.toggle("good", show && s.status === "done");
+  $("sheetsStatus").classList.toggle("bad", failed);
+  $("sheetsCsv").hidden = !(failed && s.csvFallback);
+}
+
+// On open: an export started before the popup last closed, if it's this tab's.
+activeTab(function (tab) {
+  page.tabId = tab ? tab.id : null;
+  chrome.storage.session.get({ sheetsExport: null }, function (o) {
+    showSheets(o.sheetsExport);
+  });
+});
+
+chrome.storage.onChanged.addListener(function (changes, area) {
+  if (area === "session" && changes.sheetsExport) showSheets(changes.sheetsExport.newValue);
+});
+
+$("sheets").addEventListener("click", function () {
+  activeTab(function (tab) {
+    if (!tab) return;
+    chrome.runtime.sendMessage({ type: "sheetsExport", tabId: tab.id }, function (res) {
+      // Any answer at all is shown from storage; only silence needs words here.
+      if (chrome.runtime.lastError || !res) {
+        setStatus("Extension worker unavailable \u2014 reload the extension.", "bad");
+      }
+    });
+  });
+});
+
+$("sheetsCsv").addEventListener("click", function () { doExport("csv"); });
 
 // ---- Account ----
 // Left over from bring-your-own-key: transcription now runs on Sortcut's key,

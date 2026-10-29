@@ -662,3 +662,22 @@ test("Excel: without outlier scores, no outlierScore column, as in the CSV", () 
   );
   assert.equal(Object.keys(rows).length, 4);
 });
+
+// ---- Google Sheets ----
+
+test("Google Sheets gets the CSV export's text, columns and order, and nothing downloads", () => {
+  const page = loadContent();
+  assert.deepEqual({ ...page.popup({ type: "sheetsCsv" }) }, { ok: false }, "no sort yet");
+
+  page.result(scored, { sortBy: "outlier", ranked: 1, median: 7500 });
+  page.popup({ type: "export", kind: "csv" });
+  const csv = page.lastFile().data;
+  const downloads = page.document.querySelectorAll("a").length;
+
+  const r = page.popup({ type: "sheetsCsv" });
+  assert.equal(r.ok, true);
+  assert.equal(r.username, "demo");
+  assert.equal(r.count, 2);
+  assert.equal("﻿" + r.csv, csv, "the CSV download, without its BOM");
+  assert.equal(page.document.querySelectorAll("a").length, downloads, "no download");
+});

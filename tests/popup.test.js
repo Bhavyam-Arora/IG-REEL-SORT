@@ -43,6 +43,7 @@ function loadPopup(opts) {
   loadHTML(document, fs.readFileSync(path.join(ROOT, "popup.html"), "utf8"));
 
   const store = Object.assign({}, opts.store);
+  const sessionStore = Object.assign({}, opts.session);
   const toTab = [];
   const toWorker = [];
   const changed = [];
@@ -63,6 +64,8 @@ function loadPopup(opts) {
         toWorker.push(msg);
         if (msg.type === "plan") cb(opts.workerDown ? undefined : { ok: true, plan: plan() });
         if (["account", "signIn", "signOut"].includes(msg.type)) cb({ ok: true, account: account() });
+        // The export's outcome comes through session storage, not this answer.
+        if (msg.type === "sheetsExport") cb({ ok: true });
       }
     },
     tabs: {
@@ -76,6 +79,9 @@ function loadPopup(opts) {
       local: {
         get: (defaults, cb) => cb(Object.assign({}, defaults, store)),
         remove() {}
+      },
+      session: {
+        get: (defaults, cb) => cb(Object.assign({}, defaults, sessionStore))
       },
       onChanged: { addListener: (fn) => changed.push(fn) }
     }
@@ -106,6 +112,10 @@ function loadPopup(opts) {
     // A sortState write, as content.js makes it.
     state(s) {
       for (const fn of changed) fn({ sortState: { newValue: s } }, "local");
+    },
+    // A sheetsExport write, as the worker makes it.
+    sheets(s) {
+      for (const fn of changed) fn({ sheetsExport: { newValue: s } }, "session");
     },
     status: () => ($("status").hidden ? null : $("status").textContent),
     text: () => document.body.textContent
@@ -349,20 +359,69 @@ test("live: state cleared (tab left the profile) clears the popup too", () => {
 
 // ---- Exports ----
 
-test("export buttons are enabled only when this page has sorted reels", () => {
+const EXPORTS = ["csv", "json", "xlsx", "sheets"];
+
+test("export buttons, Google Sheets included, are enabled only when this page has sorted reels", () => {
   const none = loadPopup({ store: { sortState: here({ status: "done", count: 13, warning: null }) } });
-  assert.deepEqual(["csv", "json", "xlsx"].map((id) => none.$(id).disabled), [true, true, true]);
+  assert.deepEqual(EXPORTS.map((id) => none.$(id).disabled), [true, true, true, true]);
   const some = loadPopup({ ping: { ok: true, have: 13, sorted: true, loadId: "L1" } });
-  assert.deepEqual(["csv", "json", "xlsx"].map((id) => some.$(id).disabled), [false, false, false]);
+  assert.deepEqual(EXPORTS.map((id) => some.$(id).disabled), [false, false, false, false]);
 });
 
 test("Export Excel sits next to CSV and JSON and asks the page for an .xlsx", () => {
   const p = loadPopup({ pro: false, ping: { ok: true, have: 3, sorted: true, loadId: "L1" } });
   const buttons = p.$("csv").parentElement.querySelectorAll("button").map((b) => b.textContent.trim());
-  assert.deepEqual(buttons, ["Export CSV", "Export JSON", "Export Excel"]);
+  assert.deepEqual(buttons, ["Export CSV", "Export JSON", "Export Excel", "Export to Google Sheets"]);
   p.$("xlsx").click();
   assert.deepEqual({ ...p.toTab.find((m) => m.type === "export") }, { type: "export", kind: "xlsx" });
   assert.equal(p.status(), null, "the download is the confirmation");
+});
+
+// ---- Google Sheets ----
+
+const SHOWN = { ok: true, have: 3, sorted: true, loadId: "L1" };
+
+test("Google Sheets: Free or Pro, the click asks the worker to export this tab", () => {
+  for (const pro of [false, true]) {
+    const p = loadPopup({ pro, ping: SHOWN });
+    p.$("sheets").click();
+    assert.deepEqual({ ...p.toWorker.find((m) => m.type === "sheetsExport") }, { type: "sheetsExport", tabId: 7 });
+    assert.ok(!p.toTab.some((m) => m.type === "export"), "nothing downloaded");
+  }
+});
+
+test("Google Sheets: progress and outcome show for this tab only", () => {
+  const p = loadPopup({ ping: SHOWN });
+  p.sheets({ status: "waiting", tabId: 7, at: Date.now() });
+  assert.equal(p.$("sheetsStatus").textContent, "Waiting for Google…");
+  p.sheets({ status: "uploading", tabId: 7, at: Date.now() });
+  assert.equal(p.$("sheetsStatus").textContent, "Exporting to Google Sheets…");
+  p.sheets({ status: "done", tabId: 7, at: Date.now() });
+  assert.equal(p.$("sheetsStatus").textContent, "Opened in Google Sheets.");
+  p.sheets({ status: "uploading", tabId: 8, at: Date.now() });
+  assert.equal(p.$("sheetsStatus").hidden, true, "another tab's export");
+});
+
+test("Google Sheets: cancelled says CSV and Excel need no sign-in, with no CSV button", () => {
+  const msg = "Sign in to export to Google Sheets. CSV and Excel work without signing in.";
+  const p = loadPopup({ ping: SHOWN, session: { sheetsExport: { status: "failed", tabId: 7, at: Date.now(), message: msg } } });
+  assert.equal(p.$("sheetsStatus").textContent, msg);
+  assert.equal(p.$("sheetsCsv").hidden, true);
+});
+
+test("Google Sheets: a failed upload offers the CSV, which downloads from this tab", () => {
+  const p = loadPopup({ ping: SHOWN });
+  p.sheets({ status: "failed", tabId: 7, at: Date.now(), message: "Google Sheets didn't accept the export (HTTP 500).", csvFallback: true });
+  assert.equal(p.$("sheetsStatus").hidden, false);
+  assert.equal(p.$("sheetsCsv").hidden, false);
+  assert.equal(p.$("sheetsCsv").textContent.trim(), "Download CSV instead");
+  p.$("sheetsCsv").click();
+  assert.deepEqual({ ...p.toTab.find((m) => m.type === "export") }, { type: "export", kind: "csv" });
+});
+
+test("Google Sheets: reopening the popup shows the outcome of an export it started before closing", () => {
+  const p = loadPopup({ ping: SHOWN, session: { sheetsExport: { status: "done", tabId: 7, at: Date.now() } } });
+  assert.equal(p.$("sheetsStatus").textContent, "Opened in Google Sheets.");
 });
 
 // ---- Account ----
