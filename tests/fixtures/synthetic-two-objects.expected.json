@@ -1,0 +1,21 @@
+{
+  "_about": "Two JSON objects in one body: all four reels kept.",
+  "runs": [
+    {
+      "page": "/{owner}/reels/",
+      "reels": 4,
+      "reelCodes": [
+        "SYNtwo00001",
+        "SYNtwo00002",
+        "SYNtwo00003",
+        "SYNtwo00004"
+      ],
+      "hasNextPage": true,
+      "hits": 1,
+      "responses": 1,
+      "stats": {
+        "unparsable": 0
+      }
+    }
+  ]
+}

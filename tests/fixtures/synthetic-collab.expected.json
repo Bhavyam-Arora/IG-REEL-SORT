@@ -1,0 +1,25 @@
+{
+  "_about": "Own reels and a collab kept; someone else's reel and a photo dropped.",
+  "runs": [
+    {
+      "page": "/{owner}/reels/",
+      "reels": 3,
+      "reelCodes": [
+        "SYNreel0101",
+        "SYNcollab01",
+        "SYNreel0103"
+      ],
+      "collabs": 1,
+      "hasNextPage": true,
+      "stats": {
+        "foreign": 1
+      },
+      "sort": {
+        "sortBy": "likes",
+        "limit": 50,
+        "codes": [],
+        "ranked": 3
+      }
+    }
+  ]
+}

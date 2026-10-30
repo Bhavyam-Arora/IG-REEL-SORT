@@ -1,0 +1,40 @@
+{
+  "_about": "No views anywhere: a views sort still finishes, with every reel, and says why.",
+  "runs": [
+    {
+      "page": "/{owner}/reels/",
+      "reels": 4,
+      "with": {
+        "views": 0,
+        "likes": 4,
+        "comments": 4,
+        "date": 4
+      },
+      "hasNextPage": false,
+      "sort": {
+        "sortBy": "views",
+        "limit": 50,
+        "codes": [
+          "reels_missing_metric"
+        ],
+        "ranked": 0,
+        "alternatives": [
+          "likes",
+          "comments"
+        ]
+      }
+    },
+    {
+      "page": "/{owner}/reels/",
+      "reels": 4,
+      "sort": {
+        "sortBy": "likes",
+        "limit": 50,
+        "codes": [],
+        "ranked": 4,
+        "first": "SYNnovw0004"
+      },
+      "hasNextPage": false
+    }
+  ]
+}

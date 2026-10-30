@@ -3,11 +3,22 @@
 
 (function () {
   // ---------------------------------------------------------------
-  // 1. Inject page-world scripts
+  // 1. Inject page-world scripts, with the rules
   // ---------------------------------------------------------------
-  function injectPageScript(path) {
+  // The rules (lib/rules.js) say which responses to read and what each value
+  // is called. The worker mirrors them into storage; this script can't read
+  // that file itself, and the page can't load it without the manifest listing
+  // it. So they ride along as JSON on extract.js's own <script> element, which
+  // extract.js reads as it runs, before the interceptor exists to see a
+  // response. Without them it falls back to its small built-in copy.
+  function injectPageScript(path, rules) {
     var el = document.createElement("script");
     el.src = chrome.runtime.getURL(path);
+    if (rules) {
+      try {
+        el.setAttribute("data-sortcut-rules", JSON.stringify(rules));
+      } catch (e) {}
+    }
     // Dynamically created scripts default to async, which would let them run
     // out of order. The interceptor depends on extract.js already existing,
     // so order must be preserved.
@@ -18,12 +29,17 @@
     (document.head || document.documentElement).appendChild(el);
   }
 
-  injectPageScript("lib/extract.js");
-  injectPageScript("page/interceptor.js");
-  injectPageScript("page/collector.js");
+  var injected = false;
+  function injectAll(rules) {
+    if (injected) return;
+    injected = true;
+    injectPageScript("lib/extract.js", rules);
+    injectPageScript("page/interceptor.js");
+    injectPageScript("page/collector.js");
+  }
 
   // ---------------------------------------------------------------
-  // 2. Developer capture
+  // 2. Developer capture, and the storage read that injects the scripts
   // ---------------------------------------------------------------
   // Off unless chrome.storage.local.devCapture is true, set by hand from the
   // service worker console (see README). The page-world interceptor can't read
@@ -35,8 +51,37 @@
     window.postMessage({ source: "ig-sorter-debug", type: "devCapture", on: devCapture }, "*");
   }
 
+  // One storage read for both, then the page scripts go in. It takes
+  // milliseconds; Instagram's first request waits on megabytes of its own JS.
+  // No rules stored (the worker hasn't run since an install, update or reload):
+  // ask the worker, which writes them and sends them back. A worker that is
+  // slow to wake doesn't hold the page up past RULES_WAIT_MS; extract.js then
+  // uses its built-in copy and the sort says so.
+  var RULES_WAIT_MS = 1000;
+
+  function isRules(r) {
+    return !!r && typeof r === "object" && typeof r.version === "number";
+  }
+
+  function askForRules() {
+    setTimeout(function () {
+      injectAll(null);
+    }, RULES_WAIT_MS);
+    try {
+      chrome.runtime.sendMessage({ type: "getRules" }, function (res) {
+        var err = chrome.runtime.lastError; // read, so Chrome doesn't log it
+        injectAll(!err && res && isRules(res.rules) ? res.rules : null);
+      });
+    } catch (e) {
+      injectAll(null);
+    }
+  }
+
   try {
-    chrome.storage.local.get({ devCapture: false }, function (o) {
+    chrome.storage.local.get({ devCapture: false, rules: null }, function (o) {
+      o = o || {};
+      if (isRules(o.rules)) injectAll(o.rules);
+      else askForRules();
       devCapture = o.devCapture === true;
       tellPageDevCapture();
     });
@@ -45,7 +90,10 @@
       devCapture = changes.devCapture.newValue === true;
       tellPageDevCapture();
     });
-  } catch (e) {}
+  } catch (e) {
+    // No storage (the extension was reloaded under this tab): inject anyway.
+    injectAll(null);
+  }
 
   // ---------------------------------------------------------------
   // 3. Helpers
@@ -559,7 +607,7 @@
     );
   }
 
-  function buildGrid(posts, sortBy, ranked, median, days) {
+  function buildGrid(posts, sortBy, ranked, median) {
     if (ranked === null || ranked === undefined) ranked = posts.length;
     // Which metric the outlier score is measured on, or null for a plain sort.
     var outlierOn = OUTLIER_FIELD[sortBy] || null;
@@ -594,7 +642,6 @@
       label.textContent =
         posts.length + " reels sorted by " + sortBy + " \u00b7 highest first";
     }
-    if (days) label.textContent += " \u00b7 last " + days + " days";
     bar.appendChild(label);
 
     var restore = document.createElement("button");
@@ -772,7 +819,7 @@
     unhideAll();
   }
 
-  function renderSorted(posts, sortBy, ranked, median, days) {
+  function renderSorted(posts, sortBy, ranked, median) {
     teardown();
 
     var container = findGridContainer();
@@ -800,7 +847,7 @@
     hide(container);
     var parents = hideBelow(container);
 
-    var wrap = buildGrid(posts, sortBy, ranked, median, days);
+    var wrap = buildGrid(posts, sortBy, ranked, median);
     container.parentElement.insertBefore(wrap, container);
 
     parents.forEach(function (p) {
@@ -1202,51 +1249,86 @@
       sortBy: d.sortBy,
       collected: d.collected,
       target: d.target,
-      days: d.days || null,
       message:
         "Collecting reels\u2026 " + d.collected + (d.target ? " of " + d.target : "") + " so far."
     });
   }
 
+  var METRIC_WORD = { views: "views", likes: "likes", comments: "comments" };
+
+  // What the user is told for each reason code the collector sends.
+  function codeMessage(code, d) {
+    switch (code) {
+      case "wrong_page":
+        return "Open an Instagram profile's Reels tab to sort.";
+      case "no_responses":
+        return "Instagram didn't send anything while we scrolled \u2014 check your connection, reload the page and try again.";
+      case "responses_but_no_reels":
+        return "No reels found. This profile may not have any reels, or Instagram may have changed something.";
+      case "reels_but_none_from_profile":
+        return "Couldn't read reels \u2014 Instagram may have changed something.";
+      case "profile_has_no_reels":
+        return "This profile hasn't posted any reels.";
+      case "stopped_time_limit":
+        return (
+          "Stopped at the " + minutes(d.limitMs) + " time limit \u2014 sorted the " + d.total +
+          " reels collected by then."
+        );
+      case "reels_missing_metric": {
+        var alts = (d.alternatives || []).map(function (m) {
+          return METRIC_WORD[m] || m;
+        });
+        return (
+          "Instagram isn't sending " + (METRIC_WORD[d.missingMetric] || d.missingMetric) + " right now" +
+          (alts.length ? " \u2014 try sorting by " + alts.join(" or ") + "." : ".")
+        );
+      }
+    }
+    return null;
+  }
+
   // A finished run says nothing in the popup unless something on this page
-  // went wrong: the sorted grid itself is the result.
+  // went wrong: the sorted grid itself is the result. Every failed or partial
+  // run carries its reason codes, and the words for each.
   function resultState(d, rendered) {
     var n = (d.posts || []).length;
+    var codes = Array.isArray(d.codes) ? d.codes : [];
     var state = {
-      status: d.reason === "complete" || d.reason === "end" || d.reason === "past_range" ? "done" : "stopped",
+      status: d.reason === "complete" || d.reason === "end" ? "done" : "stopped",
       reason: d.reason,
+      codes: codes,
       sortBy: d.sortBy,
       collected: d.total,
       target: d.target,
-      days: d.days || null,
       count: n,
-      warning: null
+      warning: null,
+      // Set when the page scripts ran on (part of) their built-in rules.
+      rulesWarning: (d.rules && d.rules.warning) || null,
+      // Counts only, for telling why a run stopped where it did: responses
+      // read, those holding this profile's reels (hits), reels seen from
+      // anyone, others' reels dropped, reels naming no author, and the last
+      // "more to load" flag.
+      counts: {
+        responses: d.responses || 0,
+        hits: d.hits || 0,
+        reels: (d.stats && d.stats.reels) || 0,
+        foreign: (d.stats && d.stats.foreign) || 0,
+        unreadable: d.unreadable || 0,
+        hasNextPage: d.hasNextPage === undefined ? null : d.hasNextPage
+      }
     };
+
+    var warnings = codes.map(function (c) {
+      return codeMessage(c, d);
+    }).filter(Boolean);
 
     if (!n) {
       state.status = "stopped";
-      state.warning =
-        d.reason === "navigated"
-          ? null // the popup is on some other page by now, and says so
-          : d.reason === "wrong_page"
-          ? "Open an Instagram profile's Reels tab to sort."
-          : d.days && d.seen > 0
-          ? // Reels arrived, just none recent enough for a Free run.
-            "No reels from the last " + d.days + " days."
-          : d.unreadable > 0
-          ? // Reels arrived but none named an author we could match.
-            "Couldn't read reels \u2014 Instagram may have changed something."
-          : "No reels found. This profile may not have any reels, or Instagram may have changed something.";
+      // After navigating, the popup is on some other page and says so.
+      state.warning = d.reason === "navigated" ? null : warnings[0] || codeMessage("responses_but_no_reels", d);
       return state;
     }
 
-    var warnings = [];
-    if (d.reason === "timeout") {
-      warnings.push(
-        "Stopped at the " + minutes(d.limitMs) + " time limit \u2014 sorted the " + d.total +
-        " reels collected by then."
-      );
-    }
     if (!rendered && d.reason !== "navigated") {
       warnings.push("Couldn't place the sorted grid on the page \u2014 export still works.");
     }
@@ -1277,7 +1359,6 @@
         sortBy: job.sortBy,
         collected: 0,
         target: job.limit === "all" ? null : job.limit, // capped by startSort already
-        days: job.days || null,
         message: "Collecting reels\u2026"
       });
     }
@@ -1290,6 +1371,65 @@
     } catch (e) {}
   })();
 
+  // The health log: one entry per sort, newest first, the last LOG_MAX kept
+  // (chrome.storage.local.health). What was asked, what came back, what was
+  // left out and why, and what stopped it. Counts and the profile name only:
+  // no reels, captions, links or tokens. Local; never sent anywhere. The
+  // worker's sortLog() prints it.
+  var LOG_MAX = 50;
+
+  function logSort(d) {
+    var stats = d.stats || {};
+    var kept = (d.posts || []).length;
+    var seen = d.total || 0;
+    var entry = {
+      type: "sort",
+      at: new Date().toISOString(),
+      profile: RUN_PROFILE || ownerHere(),
+      plan: d.plan || null,
+      mode: d.sortBy,
+      depth: d.depth === undefined ? null : d.depth,
+      // The profile's reels kept in the sorted grid, of `seen` collected.
+      kept: kept,
+      seen: seen,
+      // Seen but left out, by why: past the depth asked for; another
+      // account's reel; a reel naming no author; the same reel sent again.
+      overDepth: Math.max(0, seen - kept),
+      notProfile: stats.foreign || 0,
+      noAuthor: d.unreadable || 0,
+      duplicates: stats.duplicates || 0,
+      // Kept, but without the metric (missing or 0): shown after the ranked ones.
+      unranked: METRIC_SORTS[d.sortBy] ? Math.max(0, kept - (d.ranked || 0)) : 0,
+      // Responses holding the profile's reels, of all the responses read.
+      pages: d.hits || 0,
+      responses: d.responses || 0,
+      stop: d.reason || null,
+      codes: d.codes || [],
+      seconds: Math.round((d.elapsedMs || 0) / 1000),
+      rules: d.rules ? d.rules.source + " v" + d.rules.version : null,
+      rulesWarning: d.rules && d.rules.warning ? String(d.rules.warning).slice(0, 300) : null
+    };
+    // Says in this tab's console whether it was saved: a failure here is
+    // otherwise invisible, and the sort itself works either way.
+    function failed(e) {
+      console.warn("[GridSorter] health log: couldn't save this sort \u2014", e && e.message ? e.message : e);
+    }
+    try {
+      chrome.storage.local.get({ health: [] }, function (o) {
+        if (chrome.runtime.lastError || !o) return failed(chrome.runtime.lastError);
+        var list = (Array.isArray(o.health) ? o.health : []).slice(0, LOG_MAX - 1);
+        list.unshift(entry);
+        chrome.storage.local.set({ health: list }, function () {
+          if (chrome.runtime.lastError) return failed(chrome.runtime.lastError);
+          console.log("[GridSorter] health log: sort saved (" + entry.kept + " reels, stop: " + entry.stop + "; " +
+            list.length + " entries)");
+        });
+      });
+    } catch (e) {
+      failed(e);
+    }
+  }
+
   // ---------------------------------------------------------------
   // 7. Messages from the page world
   // ---------------------------------------------------------------
@@ -1301,19 +1441,6 @@
     if (d.type === "progress") progressState(d);
 
     if (d.type === "interceptorReady") tellPageDevCapture();
-
-    if (d.type === "healthAlert") {
-      try {
-        chrome.storage.local.get({ health: [] }, function (o) {
-          var list = o.health || [];
-          list.unshift({
-            reason: d.reason, stop: d.stop, path: d.path, hits: d.hits,
-            responses: d.responses, ts: d.ts
-          });
-          chrome.storage.local.set({ health: list.slice(0, 20) });
-        });
-      } catch (e) {}
-    }
 
     // Only ever in answer to the popup's request. A page script can post this
     // message too; without the check it could make us download whatever it
@@ -1334,6 +1461,7 @@
     }
 
     if (d.type === "result") {
+      logSort(d);
       // Run off to another profile: nothing of it belongs on this page.
       if (leftProfile()) {
         endRun();
@@ -1343,7 +1471,7 @@
       // After navigating away the "grid" on screen belongs to some other page.
       var ok =
         LAST.length && d.reason !== "navigated"
-          ? renderSorted(LAST, d.sortBy, d.ranked, d.median, d.days)
+          ? renderSorted(LAST, d.sortBy, d.ranked, d.median)
           : false;
       try {
         chrome.storage.local.set({ lastRun: { count: LAST.length, sortBy: d.sortBy, ts: Date.now() } });
@@ -1363,9 +1491,8 @@
     }
 
     if (msg.type === "startSort") {
-      // days and maxReels are set on a Free run only: how far back it reaches
-      // and how many reels it keeps. The collector enforces both.
-      var days = msg.days > 0 ? msg.days : null;
+      // maxReels is set on a Free run only: how many reels it keeps, of any
+      // age. The collector enforces it.
       var maxReels = msg.maxReels > 0 ? msg.maxReels : null;
       var limit = maxReels && (msg.limit === "all" || msg.limit > maxReels) ? maxReels : msg.limit;
       if (msg.tabId !== undefined) TAB_ID = msg.tabId;
@@ -1375,14 +1502,15 @@
         sortBy: msg.sortBy,
         collected: 0,
         target: limit === "all" ? null : limit,
-        days: days,
         message: "Reloading and collecting reels\u2026"
       });
       try {
         sessionStorage.setItem(
           "igSorterJob",
           JSON.stringify({
-            sortBy: msg.sortBy, limit: limit, days: days, maxReels: maxReels, tabId: TAB_ID
+            sortBy: msg.sortBy, limit: limit, maxReels: maxReels, tabId: TAB_ID,
+            // Free is the plan that sends a cap. For the health log.
+            plan: maxReels ? "free" : "pro"
           })
         );
       } catch (e) {}

@@ -1,0 +1,20 @@
+{
+  "_about": "A profile with no reels: an empty, finished reels list.",
+  "runs": [
+    {
+      "page": "/{owner}/reels/",
+      "reels": 0,
+      "hasNextPage": true,
+      "stats": {
+        "emptyReelsLists": 1
+      },
+      "sort": {
+        "sortBy": "views",
+        "limit": 50,
+        "codes": [
+          "profile_has_no_reels"
+        ]
+      }
+    }
+  ]
+}

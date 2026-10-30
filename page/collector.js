@@ -146,26 +146,63 @@
   }
 
   // Stop rules. Collection must always end on its own, whatever Instagram
-  // does, and always hand back whatever it has by then.
-  //  - NO_REELS: responses keep arriving but none hold this profile's reels.
-  //    Instagram has changed something; scrolling longer won't help.
-  //  - STALL: reels were arriving and then stopped.
-  //  - TIME_LIMIT: a backstop for everything else, e.g. nothing arriving at all.
-  //  - PAST_RANGE: a Free run (job.days) has scrolled past its date range.
-  var NO_REELS_SCROLLS = 10;
-  var STALL_SCROLLS = 25;
-  var TIME_LIMIT_MS = 3 * 60 * 1000;
-  var TIME_LIMIT_ALL_MS = 10 * 60 * 1000;
+  // does, and always hand back whatever it has by then. The numbers are the
+  // rules' limits.
+  //  - no_reels: responses keep arriving but none hold this profile's reels
+  //    (scrollsWithoutReels). Scrolling longer won't help.
+  //  - stalled: reels were arriving and then stopped (scrollsWithoutNewReels).
+  //  - timeout: a backstop for everything else, e.g. nothing arriving at all.
 
-  // The Reels tab lists newest first, except for up to three pinned reels at
-  // the top, which can be any age. So the first old reel may just be a pin;
-  // one more old reel than can be pinned means the range is behind us.
-  var MAX_PINNED = 3;
-  var DAY_MS = 24 * 60 * 60 * 1000;
+  function has(v) {
+    return typeof v === "number" && isFinite(v);
+  }
+
+  // Why a sort came back empty or partial, as codes content.js puts into
+  // words. Worked out from counts only: the interceptor never keeps anything
+  // that isn't this profile's.
+  //  - Nothing kept: no_responses / reels_but_none_from_profile /
+  //    profile_has_no_reels / responses_but_no_reels.
+  //  - Something kept: stopped_time_limit and/or reels_missing_metric (most
+  //    reels lack the metric asked for; they're still sorted, the ones with it
+  //    first). missingMetric and alternatives say which, and what to try.
+  function diagnose(stop, all, sortBy) {
+    var stats = window.__IG_SORTER_STATS__ || {};
+    var out = { codes: [], missingMetric: null, alternatives: [] };
+    if (stop === "navigated") return out;
+
+    if (!all.length) {
+      if (!(window.__IG_SORTER_RESPONSES__ > 0)) out.codes.push("no_responses");
+      else if (window.__IG_SORTER_UNREADABLE__ > 0) out.codes.push("reels_but_none_from_profile");
+      else if (stats.emptyReelsLists > 0) out.codes.push("profile_has_no_reels");
+      else if (stats.foreign > 0) out.codes.push("reels_but_none_from_profile");
+      else out.codes.push("responses_but_no_reels");
+      return out;
+    }
+
+    if (stop === "timeout") out.codes.push("stopped_time_limit");
+    if (METRICS[sortBy]) {
+      var field = metricField(sortBy);
+      var most = function (f) {
+        return all.filter(function (p) { return has(p[f]); }).length * 2 > all.length;
+      };
+      if (!most(field)) {
+        out.codes.push("reels_missing_metric");
+        out.missingMetric = field;
+        out.alternatives = ["views", "likes", "comments"].filter(function (f) {
+          return f !== field && most(f);
+        });
+      }
+    }
+    return out;
+  }
 
   async function run(job) {
     var lib = window.__IG_SORTER_REELS__;
     var owner = lib ? lib.reelsTabOwner(location.href) : null;
+    // extract.js always resolves a set (its built-in copy at worst).
+    var limits = (window.__IG_SORTER_RULES__ || {}).limits;
+    var rulesInfo = window.__IG_SORTER_RULES_INFO__ || null;
+    if (!limits) owner = null;
 
     // "All reels" has no count to stop at, so collection ends when the profile
     // runs out (hasNextPage false) or a stop rule fires. reported is what the
@@ -176,25 +213,18 @@
     // popup's Depth menu is not the only thing standing between Free and more.
     if (job.maxReels > 0) target = Math.min(target, job.maxReels);
     var reported = isFinite(target) ? target : null;
-    var limitMs = isFinite(target) ? TIME_LIMIT_MS : TIME_LIMIT_ALL_MS;
+    var limitMs = limits ? (isFinite(target) ? limits.timeLimitMs : limits.timeLimitAllMs) : 0;
     var started = Date.now();
     var reason = null;
-
-    // A Free run counts only reels from the last job.days days. A reel whose
-    // date can't be read can't be shown to be in range, so it doesn't count.
-    var days = job.days > 0 ? job.days : null;
-    var since = days ? started - days * DAY_MS : null;
-    var inRange = function (p) {
-      return since === null || (p.createdAt !== null && p.createdAt !== undefined && ts(p) >= since);
-    };
 
     // The popup only starts a job on a Reels tab, so this is a backstop: never
     // scroll anything else.
     if (!owner) {
       clearJob();
       post("result", {
-        posts: [], ranked: 0, median: null, sortBy: job.sortBy, target: reported, days: days,
-        total: 0, hits: 0, unreadable: 0, reason: "wrong_page", limitMs: limitMs, elapsedMs: 0
+        posts: [], ranked: 0, median: null, sortBy: job.sortBy, target: reported,
+        total: 0, hits: 0, unreadable: 0, reason: "wrong_page", codes: ["wrong_page"],
+        missingMetric: null, alternatives: [], rules: rulesInfo, limitMs: limitMs, elapsedMs: 0
       });
       return;
     }
@@ -211,20 +241,15 @@
         break;
       }
 
-      // seen is every reel of this profile's that has arrived; count is the
-      // ones the run keeps, which on Pro is all of them.
+      // Every reel of this profile's that has arrived, of any age.
       var seen = collected(owner);
-      var count = seen.filter(inRange).length;
+      var count = seen.length;
       if (count >= target) {
         reason = "complete";
         break;
       }
       if (seen.length > 0 && window.__IG_SORTER_PAGEINFO__.hasNextPage === false) {
         reason = "end";
-        break;
-      }
-      if (seen.length - count > MAX_PINNED) {
-        reason = "past_range";
         break;
       }
       if (Date.now() - started >= limitMs) {
@@ -238,12 +263,12 @@
         var responses = window.__IG_SORTER_RESPONSES__ || 0;
         if (responses > responsesSeen) emptyScrolls++;
         responsesSeen = responses;
-        if (emptyScrolls >= NO_REELS_SCROLLS) {
+        if (emptyScrolls >= limits.scrollsWithoutReels) {
           reason = "no_reels";
           break;
         }
       } else if (seen.length === last) {
-        if (++stagnant >= STALL_SCROLLS) {
+        if (++stagnant >= limits.scrollsWithoutNewReels) {
           reason = "stalled";
           break;
         }
@@ -258,7 +283,6 @@
         collected: count,
         target: reported,
         sortBy: job.sortBy,
-        days: days,
         elapsedMs: Date.now() - started,
         limitMs: limitMs
       });
@@ -270,36 +294,33 @@
       await wait(900);
     }
 
-    var seenAll = collected(owner);
-    var all = seenAll.filter(inRange);
+    var all = collected(owner);
     var result = rankPosts(all, job.sortBy, target);
+    var why = diagnose(reason, all, job.sortBy);
 
     if (reason !== "navigated") window.scrollTo(0, 0);
-
-    if (seenAll.length === 0) {
-      post("healthAlert", {
-        reason: "zero_posts_captured",
-        stop: reason,
-        path: location.pathname,
-        hits: window.__IG_SORTER_HITS__ || 0,
-        responses: window.__IG_SORTER_RESPONSES__ || 0,
-        ts: new Date().toISOString()
-      });
-    }
 
     post("result", {
       posts: result.posts,
       ranked: result.ranked,
       median: result.median,
       sortBy: job.sortBy,
+      // As asked (25, 50, … or "all"), and the plan it was asked on, for the
+      // health log.
+      depth: job.limit,
+      plan: job.plan || null,
       target: reported,
-      days: days,
       total: all.length,
-      // Including any outside a Free run's range.
-      seen: seenAll.length,
       hits: window.__IG_SORTER_HITS__ || 0,
       unreadable: window.__IG_SORTER_UNREADABLE__ || 0,
       reason: reason,
+      codes: why.codes,
+      missingMetric: why.missingMetric,
+      alternatives: why.alternatives,
+      stats: window.__IG_SORTER_STATS__ || null,
+      responses: window.__IG_SORTER_RESPONSES__ || 0,
+      hasNextPage: window.__IG_SORTER_PAGEINFO__.hasNextPage,
+      rules: rulesInfo,
       limitMs: limitMs,
       elapsedMs: Date.now() - started
     });

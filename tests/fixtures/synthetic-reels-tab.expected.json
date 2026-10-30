@@ -1,0 +1,36 @@
+{
+  "_about": "Three Reels-tab pages, 12 reels; the last page ends the list.",
+  "runs": [
+    {
+      "page": "/{owner}/reels/",
+      "reels": 12,
+      "with": {
+        "views": 12,
+        "likes": 12,
+        "comments": 12,
+        "date": 12
+      },
+      "hasNextPage": false,
+      "hits": 3,
+      "responses": 3,
+      "unreadable": 0,
+      "stats": {
+        "foreign": 0
+      },
+      "sort": {
+        "sortBy": "views",
+        "limit": 50,
+        "codes": [],
+        "ranked": 12,
+        "first": "SYNreel0012"
+      }
+    },
+    {
+      "page": "/{owner}/",
+      "reels": 0,
+      "hasNextPage": true,
+      "hits": 0,
+      "responses": 3
+    }
+  ]
+}

@@ -42,6 +42,7 @@ function loadWorker(opts) {
   const pings = [];
   const intervals = new Set();
   let onMessage = null;
+  const lifecycle = { installed: [], startup: [] };
   let onRemoved = null;
   const area = (store) => ({
     get: async (k) => (typeof k === "string" ? { [k]: store[k] } : Object.assign({}, k, store)),
@@ -52,7 +53,8 @@ function loadWorker(opts) {
     console: { log() {}, warn: (...a) => warnings.push(a.join(" ")) },
     chrome: {
       runtime: {
-        onInstalled: { addListener() {} },
+        onInstalled: { addListener: (fn) => lifecycle.installed.push(fn) },
+        onStartup: { addListener: (fn) => lifecycle.startup.push(fn) },
         onMessage: { addListener: (fn) => (onMessage = fn) },
         getPlatformInfo: async () => (pings.push(Date.now()), { os: "mac" })
       },
@@ -102,7 +104,10 @@ function loadWorker(opts) {
     run: (code) => vm.runInContext(code, w),
     send: (msg) =>
       new Promise((resolve) => onMessage(msg, { tab: { id: 1 }, frameId: 0 }, resolve)),
-    closeTab: (tabId) => onRemoved(tabId)
+    closeTab: (tabId) => onRemoved(tabId),
+    // Chrome waking the worker for runtime.onInstalled / onStartup.
+    installed: (reason) => lifecycle.installed.forEach((fn) => fn({ reason })),
+    startup: () => lifecycle.startup.forEach((fn) => fn())
   };
 }
 
@@ -266,7 +271,7 @@ const offline = () => {
 
 test("plan: signed out is Free, and /v1/me isn't asked", async () => {
   const sw = loadWorker({ signedIn: false, routes: { [ME]: me("pro_yearly") } });
-  assert.deepEqual({ ...(await plan(sw)) }, { plan: "none", pro: false, freeDays: 50, freeMaxReels: 50 });
+  assert.deepEqual({ ...(await plan(sw)) }, { plan: "none", pro: false, freeMaxReels: 50 });
   assert.deepEqual(sw.calls, []);
 });
 
@@ -390,4 +395,101 @@ test("a backend 402 for the plan is needsPro too; used-up transcripts are not", 
     assert.equal(r.ok, false);
     assert.equal(r.needsPro, needsPro, msg);
   }
+});
+
+// ---- Rules ----
+// content.js reads the rules from storage, so the worker puts lib/rules.js there.
+
+const settled = () => new Promise((r) => setTimeout(r, 5));
+
+test("rules: the bundled copy is mirrored into storage when the worker starts", async () => {
+  const sw = loadWorker();
+  await settled();
+  const bundled = JSON.parse(JSON.stringify(sw.run("SORTCUT_RULES")));
+  assert.deepEqual(JSON.parse(JSON.stringify(sw.local.rules)), bundled);
+});
+
+test("rules: an older or different stored copy is replaced; a newer one stays", async () => {
+  const old = loadWorker({ local: { rules: { version: 0, fields: {} } } });
+  await settled();
+  assert.equal(old.local.rules.version, old.run("SORTCUT_RULES.version"));
+  assert.ok(Array.isArray(old.local.rules.fields.views));
+
+  const newer = { version: 9999, fields: { views: ["from_the_server"] } };
+  const kept = loadWorker({ local: { rules: newer } });
+  await settled();
+  assert.deepEqual(kept.local.rules, newer);
+});
+
+// The reload case seen in real Chrome: the extension reloaded, storage holding
+// every other key but no rules. Each way the worker is woken writes them.
+const AFTER_RELOAD = { health: [], lastPlan: {}, lastRun: {}, sortState: null, transcribeStatus: {} };
+
+test("rules, after a reload: install/update and browser startup each write them", async () => {
+  for (const wake of [(sw) => sw.installed("update"), (sw) => sw.installed("install"), (sw) => sw.startup()]) {
+    const sw = loadWorker({ local: Object.assign({}, AFTER_RELOAD) });
+    await settled();
+    delete sw.local.rules; // as if the worker's first start never got to write them
+    wake(sw);
+    await settled();
+    assert.equal(sw.local.rules && sw.local.rules.version, sw.run("SORTCUT_RULES.version"), String(wake));
+    assert.deepEqual(Object.keys(sw.local).sort(), ["auth", ...Object.keys(AFTER_RELOAD), "rules"].sort(), "nothing else touched");
+  }
+});
+
+test("rules, after a reload: content.js asks, and gets them back as they're written", async () => {
+  const sw = loadWorker({ local: Object.assign({}, AFTER_RELOAD) });
+  await settled();
+  delete sw.local.rules;
+  const r = await sw.send({ type: "getRules" });
+  assert.equal(r.ok, true);
+  const bundled = JSON.parse(JSON.stringify(sw.run("SORTCUT_RULES")));
+  assert.deepEqual(JSON.parse(JSON.stringify(r.rules)), bundled);
+  assert.deepEqual(JSON.parse(JSON.stringify(sw.local.rules)), bundled);
+});
+
+test("rules: asked while a newer copy is stored, the newer copy is the answer", async () => {
+  const newer = { version: 9999, fields: { views: ["from_the_server"] } };
+  const sw = loadWorker({ local: { rules: newer } });
+  const r = await sw.send({ type: "getRules" });
+  assert.deepEqual(JSON.parse(JSON.stringify(r.rules)), newer);
+  assert.deepEqual(sw.local.rules, newer);
+});
+
+// ---- The health log ----
+
+test("sortLog(): the health log, newest first, printed and returned", async () => {
+  const health = [{ type: "sort", profile: "demo", kept: 25, codes: ["stopped_time_limit"] }, { type: "sort", profile: "b", codes: [] }];
+  const sw = loadWorker({ local: { health } });
+  const tables = [];
+  sw.run("console").table = (rows) => tables.push(rows);
+  const list = await sw.run("sortLog()");
+  assert.deepEqual(JSON.parse(JSON.stringify(list)), health);
+  assert.equal(tables.length, 1);
+  assert.equal(tables[0][0].codes, "stopped_time_limit", "codes flattened for the table");
+});
+
+test("sortLog is a global the moment the worker script runs, and the worker says so", () => {
+  const sw = loadWorker();
+  assert.equal(sw.run("typeof sortLog"), "function");
+  assert.equal(sw.run("self.sortLog === sortLog"), true);
+});
+
+test("rules: a stored copy with the same content in another key order isn't rewritten", async () => {
+  const sw0 = loadWorker();
+  await settled();
+  const reordered = (function flip(v) {
+    if (Array.isArray(v)) return v.map(flip);
+    if (v && typeof v === "object") {
+      const out = {};
+      Object.keys(v).reverse().forEach((k) => (out[k] = flip(v[k])));
+      return out;
+    }
+    return v;
+  })(JSON.parse(JSON.stringify(sw0.local.rules)));
+  const sw = loadWorker({ local: { rules: reordered } });
+  await settled();
+  sw.installed("update");
+  await settled();
+  assert.equal(sw.local.rules, reordered, "the stored object is the one that was there");
 });

@@ -30,7 +30,7 @@ var PRO_SORTS = { outlier: 1, outlierLikes: 1, outlierComments: 1 };
 // Where a Pro-only sort lands on Free: the same metric, without the score.
 var FREE_SORT = { outlier: "views", outlierLikes: "likes", outlierComments: "comments" };
 // freeMaxReels is the worker's FREE_MAX_REELS; this is it until it answers.
-var plan = { pro: false, freeDays: null, freeMaxReels: 50 };
+var plan = { pro: false, freeMaxReels: 50 };
 
 // Pro's default depth is the one popup.html selects. Free's is the deepest it
 // may choose. Either only until the depth is picked by hand.
@@ -73,7 +73,6 @@ function deepestFreeLimit() {
 function applyPlan(p) {
   plan = {
     pro: !!p.pro,
-    freeDays: p.freeDays || null,
     freeMaxReels: p.freeMaxReels || plan.freeMaxReels
   };
   lockOptions($("sortBy"), function (v) { return !PRO_SORTS[v]; });
@@ -228,13 +227,12 @@ $("go").addEventListener("click", function () {
 
       send(
         tab.id,
-        // days and maxReels limit a Free run to its recent reels, and to so
-        // many of them; Pro has neither. tabId ties the run to this tab.
+        // maxReels caps a Free run at so many reels; Pro has no cap. tabId
+        // ties the run to this tab.
         {
           type: "startSort",
           sortBy: sortBy,
           limit: limit,
-          days: plan.pro ? null : plan.freeDays,
           maxReels: plan.pro ? null : plan.freeMaxReels,
           tabId: tab.id
         },

@@ -8,7 +8,7 @@ transcription (Pro) runs through Sortcut.
 
 | | Free (signed out, or no Pro plan) | Pro (`pro_monthly` / `pro_yearly`) |
 |---|---|---|
-| Reels sorted | up to 50, from the last 50 days | any depth, the full history |
+| Reels sorted | up to 50 per sort, of any age | any depth |
 | Sort by | views, likes, comments | those, plus the three outlier scores |
 | Export CSV / JSON / Excel | yes, no sign-in needed | yes |
 | Transcribe | no | yes |
@@ -18,8 +18,8 @@ The plan comes from `/v1/me` (cached 60 s). One function, `isPro()` in
 service worker. The last plan seen is kept in `chrome.storage.local` under
 `lastPlan` with the time it was seen: when Sortcut can't be reached (no network,
 or a 5xx), that plan holds for 24 hours, then it's Free. Signed out, a session
-that can't be refreshed, or any other refusal is Free. The Free range is
-`FREE_DAYS` and the Free cap `FREE_MAX_REELS`, both in `lib/config.js`.
+that can't be refreshed, or any other refusal is Free. The Free cap is
+`FREE_MAX_REELS` in `lib/config.js`.
 
 On Free, Pro's choices stay in the popup's menus, greyed out, labelled
 "— Pro", and can't be picked: the three outlier sorts under Rank by, and 100,
@@ -30,12 +30,8 @@ sort to the same metric unscored, a depth to 50. The popup's only upgrade
 prompt is the "Upgrade to Pro" link in the Account section, shown to anyone not
 on Pro.
 
-- **Free range.** A Free sort counts only reels whose date (`taken_at`, or the
-  date in the media id) is within the last 50 days, and stops scrolling once
-  older reels arrive. Up to three pinned reels at the top of the Reels tab can
-  be any age, so it's the fourth older reel that stops it. Depth still applies.
-  The sorted grid's bar says "last 50 days".
-- **Free cap.** A Free sort keeps at most 50 reels. The popup sends the cap
+- **Free cap.** A Free sort keeps at most 50 reels, of any age; there is no
+  date range. The popup sends the cap
   with the job and the collector enforces it whatever depth arrives, so it
   doesn't rest on the Depth menu alone.
 - **Transcribe.** Signed in on Free, a Transcribe click opens an Upgrade
@@ -98,14 +94,13 @@ needs): no library and no dependency.
   but none named an author, "Couldn't read reels — Instagram may have changed
   something.";
 - reels stop arriving for ~25 scrolls;
-- the time limit: 3 minutes for a fixed depth, 10 minutes for All reels;
-- on Free, older reels than the 50-day range start arriving (see above).
+- the time limit: 3 minutes for a fixed depth, 10 minutes for All reels.
 
 Whatever stopped it, the reels collected so far are sorted and shown. The
 popup has no summary of a finished sort: the sorted grid is the result. Its
 status area shows only progress while a sort runs on the current page, and
 warnings about the current page: the wrong page, no reels found or couldn't
-read reels, no reels in the last 50 days, stopped by the time limit, or the
+read reels, a metric Instagram isn't sending, stopped by the time limit, or the
 sorted grid couldn't be placed. Export is enabled only when the current page
 has sorted reels.
 
@@ -162,11 +157,78 @@ Passive response interception. A page-world script wraps `XMLHttpRequest` and
 It never constructs its own API request, so it is unaffected when Instagram
 rotates the `doc_id` on its GraphQL queries.
 
-Posts are matched by shape (a shortcode plus at least one engagement number)
-rather than by exact field name, so internal field renames do not blind it.
-Instagram's GraphQL traffic also carries the inbox, highlights and suggested
-reels, so only the target profile's reels are kept, and only the list that held
-them decides whether there's a next page.
+It reads every JSON response on instagram.com under `/api/` or any path
+containing `graphql`, not a fixed list of endpoints: Instagram moves its data
+between addresses on its own. Bodies behind a `for (;;);` prefix and bodies
+holding several JSON objects are unwrapped; very large ones are skipped and
+counted.
+
+Posts are matched by shape (a shortcode plus at least one engagement number),
+and every field is looked up through a list of aliases, so renames and moved
+containers do not blind it. Those responses also carry the inbox, highlights,
+the timeline and suggested reels, so only the target profile's reels (owner or
+collaborator) are kept; everything else is dropped on the spot, DMs are never
+read at all, and only a list made up mostly of the profile's reels decides
+whether there's a next page.
+
+### Rules (`lib/rules.js`)
+
+Every Instagram-specific name lives in `lib/rules.js` and nowhere else: which
+responses to read, the aliases for each value, the paging flags, and the stop
+limits. It is plain JSON-compatible data with a `version`; bump it on every
+change. The worker writes it to `chrome.storage.local.rules` on install and
+update (including Reload on `chrome://extensions`), on browser startup, and
+whenever it wakes. `content.js` hands the stored copy to the page scripts as
+JSON on the injected `lib/extract.js` element; if none is stored it asks the
+worker (`getRules`), which writes it and sends it back, and injects with that
+(waiting at most 1 second). Anything missing or malformed falls back to a small
+built-in copy in `lib/extract.js`, and the sort records that as a warning
+(`sortState.rulesWarning` and the health log's `rules` / `rulesWarning`).
+
+### Why a sort failed
+
+Every failed or partial sort stores reason codes in `sortState.codes`, and the
+popup shows the words for them:
+
+| Code | Shown to the user |
+|---|---|
+| `no_responses` | Instagram didn't send anything while we scrolled — check your connection, reload the page and try again. |
+| `responses_but_no_reels` | No reels found. This profile may not have any reels, or Instagram may have changed something. |
+| `reels_but_none_from_profile` | Couldn't read reels — Instagram may have changed something. |
+| `profile_has_no_reels` | This profile hasn't posted any reels. |
+| `stopped_time_limit` | Stopped at the 3-minute time limit — sorted the N reels collected by then. |
+| `reels_missing_metric` | Instagram isn't sending views right now — try sorting by likes or comments. |
+| `wrong_page` | Open an Instagram profile's Reels tab to sort. |
+
+The last two kinds still hand back a full sorted grid.
+
+## Health log
+
+Every sort, empty or not, adds one entry to `chrome.storage.local.health`,
+newest first; the last 50 are kept. It stays on this machine. To read it, open
+the service worker's console (`chrome://extensions` → Sortcut → **service
+worker**) and run:
+
+```
+sortLog()
+```
+
+It prints a table and returns the entries. Each holds counts and the profile
+name only (no reels, captions, links or tokens):
+
+| Field | Meaning |
+|---|---|
+| `at`, `profile`, `plan`, `mode`, `depth` | when, whose Reels tab, Free or Pro, Rank by, Depth as asked |
+| `kept` / `seen` | reels in the sorted grid / the profile's reels collected |
+| `overDepth` | collected but past the depth asked for |
+| `notProfile` | other accounts' reels seen and dropped |
+| `noAuthor` | reels seen that named no author, dropped |
+| `duplicates` | the profile's reels sent again, kept once |
+| `unranked` | kept, but without the metric (missing or 0), shown after the ranked ones |
+| `pages` / `responses` | responses holding the profile's reels / all responses read |
+| `stop` | what ended collection: `complete`, `end`, `stalled`, `timeout`, `no_reels`, `navigated`, `wrong_page` |
+| `codes` | reason codes (see "Why a sort failed") |
+| `seconds`, `rules`, `rulesWarning` | how long it ran; which rules it ran on |
 
 ## Developer capture
 
@@ -196,17 +258,24 @@ npm test        # or: node --test tests/*.test.js
 ```
 
 No dependencies. The tests load the page scripts into a Node `vm` with a stub
-`window` and run them against `tests/fixtures/`: the extractor, the endpoint
-filter, ownership (including collab reels), the reels-tab URL check, and the
-collector's stop rules, including the Free 50-day range and its early stop.
+`window` and run them against `tests/fixtures/`: the extractor, the address
+filter, ownership (including collab reels), the reels-tab URL check, the rules
+and their fallback, and the collector's stop rules and reason codes, including
+the Free 50-reel cap.
+
+Every fixture runs through the whole pipeline (filter → unwrap → extract →
+ownership → paging, optionally a full sort) and must match its
+`NAME.expected.json` (format at the top of `tests/fixtures.test.js`). To add a
+sample, drop `NAME.json` and `NAME.expected.json` into `tests/fixtures/`;
+nothing else changes.
 `content.js` runs on a stand-in Instagram page (`tests/dom.js`, a minimal DOM)
 for what the sorted view hides and restores, the failure card, the sign-in and
 Upgrade dialogs, and the Excel file (unzipped, CRC-checked, and its sheet XML
 read back cell by cell). `popup.js` runs on the real `popup.html` for what Free
 and Pro can start. `background.js` runs against a stub network for the size
 check, signed-out handling, error wording, and the plan rules (including the
-24-hour last-known plan). Tests against real samples run only when those
-(gitignored) files are present, and are skipped otherwise.
+24-hour last-known plan). Real samples, and their expected files, are
+gitignored and run only where they are present.
 
 ## Install (unpacked)
 
@@ -224,9 +293,10 @@ After any code change, click the reload arrow on the extension card.
 | `manifest.json` | — | Permissions and wiring |
 | `content.js` | isolated | Injects page scripts, renders grid, exports (CSV, JSON, Excel), dialogs |
 | `background.js` | worker | Instagram video lookup + download, Sortcut API calls for transcription |
-| `lib/config.js` | worker | Environment settings, `FREE_DAYS`, `FREE_MAX_REELS` |
+| `lib/config.js` | worker | Environment settings, `FREE_MAX_REELS` |
 | `lib/auth.js` | worker | Google sign-in, tokens, API helper, `isPro()` |
-| `lib/extract.js` | page, popup | Shape-based extraction; reels-tab URL check and ownership |
+| `lib/rules.js` | worker | Data only: every Instagram name, address and stop limit |
+| `lib/extract.js` | page, popup | Rules handover and fallback; extraction; reels-tab URL check and ownership |
 | `page/interceptor.js` | page | XHR + fetch response hooks |
 | `page/collector.js` | page | Scroll loop, stop rules, sort, handoff |
 | `popup.*` | — | UI |

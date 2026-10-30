@@ -67,6 +67,7 @@ function loadWorker(opts) {
     chrome: {
       runtime: {
         onInstalled: { addListener() {} },
+        onStartup: { addListener() {} },
         onMessage: { addListener: (fn) => (onMessage = fn) },
         getPlatformInfo: async () => ({ os: "mac" })
       },

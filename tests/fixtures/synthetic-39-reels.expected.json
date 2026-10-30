@@ -1,0 +1,66 @@
+{
+  "_about": "Regression: a 39-reel profile in pages of 12 must sort all 39 at Depth 50 and 100 (once sorted only 25).",
+  "runs": [
+    {
+      "page": "/{owner}/reels/",
+      "reels": 39,
+      "with": {
+        "views": 39,
+        "likes": 39,
+        "comments": 39,
+        "date": 39
+      },
+      "hasNextPage": false,
+      "hits": 4,
+      "responses": 4,
+      "unreadable": 0,
+      "stats": {
+        "foreign": 0
+      }
+    },
+    {
+      "page": "/{owner}/reels/",
+      "reels": 39,
+      "hasNextPage": false,
+      "sort": {
+        "sortBy": "views",
+        "limit": 50,
+        "codes": [],
+        "ranked": 39
+      }
+    },
+    {
+      "page": "/{owner}/reels/",
+      "reels": 39,
+      "hasNextPage": false,
+      "sort": {
+        "sortBy": "views",
+        "limit": 100,
+        "codes": [],
+        "ranked": 39
+      }
+    },
+    {
+      "page": "/{owner}/reels/",
+      "reels": 39,
+      "hasNextPage": false,
+      "sort": {
+        "sortBy": "likes",
+        "limit": 50,
+        "codes": [],
+        "ranked": 39
+      }
+    },
+    {
+      "page": "/{owner}/reels/",
+      "reels": 39,
+      "hasNextPage": false,
+      "sort": {
+        "sortBy": "comments",
+        "limit": 100,
+        "codes": [],
+        "ranked": 39
+      }
+    }
+  ]
+}

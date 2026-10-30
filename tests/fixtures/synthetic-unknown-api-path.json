@@ -1,0 +1,19 @@
+{
+  "_fixture": "SYNTHETIC. demo.creator's reels arriving from an /api/ path no list of ours ever named, in the older REST shape: items[].media with paging_info.more_available. All made up.",
+  "page": "/demo.creator/reels/",
+  "capturedAt": "2026-10-01T00:00:00.000Z",
+  "userAgent": "SYNTHETIC",
+  "extensionVersion": "synthetic",
+  "graphqlBodies": [
+    {
+      "t": "2026-10-01T00:00:00.000Z",
+      "via": "fetch",
+      "url": "/api/v9/creator_tools/reels_listing/?count=12",
+      "status": 200,
+      "contentType": "text/javascript; charset=utf-8",
+      "length": 2166,
+      "truncated": false,
+      "body": "{\"items\":[{\"media\":{\"pk\":\"3987440744511046647\",\"id\":\"3987440744511046647_9000000001\",\"code\":\"SYNpath0001\",\"product_type\":\"clips\",\"play_count\":150000,\"view_count\":null,\"like_count\":7500,\"comment_count\":300,\"media_type\":2,\"user\":{\"pk\":\"9000000001\",\"id\":\"9000000001\",\"username\":\"demo.creator\",\"full_name\":\"Synthetic demo.creator\",\"is_private\":false,\"__typename\":\"XDTUserDict\"},\"coauthor_producers\":[],\"image_versions2\":{\"candidates\":[{\"url\":\"https://cdn.example.invalid/synthetic/SYNpath0001.jpg\",\"width\":640,\"height\":1136}]},\"video_versions\":[{\"url\":\"https://cdn.example.invalid/synthetic/SYNpath0001.mp4\",\"width\":480,\"height\":854}],\"caption\":{\"text\":\"Synthetic caption SYNpath0001\"},\"video_duration\":30}},{\"media\":{\"pk\":\"3988165520242246648\",\"id\":\"3988165520242246648_9000000001\",\"code\":\"SYNpath0002\",\"product_type\":\"clips\",\"play_count\":160000,\"view_count\":null,\"like_count\":8000,\"comment_count\":320,\"media_type\":2,\"user\":{\"pk\":\"9000000001\",\"id\":\"9000000001\",\"username\":\"demo.creator\",\"full_name\":\"Synthetic demo.creator\",\"is_private\":false,\"__typename\":\"XDTUserDict\"},\"coauthor_producers\":[],\"image_versions2\":{\"candidates\":[{\"url\":\"https://cdn.example.invalid/synthetic/SYNpath0002.jpg\",\"width\":640,\"height\":1136}]},\"video_versions\":[{\"url\":\"https://cdn.example.invalid/synthetic/SYNpath0002.mp4\",\"width\":480,\"height\":854}],\"caption\":{\"text\":\"Synthetic caption SYNpath0002\"},\"video_duration\":31}},{\"media\":{\"pk\":\"3988890295973446649\",\"id\":\"3988890295973446649_9000000001\",\"code\":\"SYNpath0003\",\"product_type\":\"clips\",\"play_count\":170000,\"view_count\":null,\"like_count\":8500,\"comment_count\":340,\"media_type\":2,\"user\":{\"pk\":\"9000000001\",\"id\":\"9000000001\",\"username\":\"demo.creator\",\"full_name\":\"Synthetic demo.creator\",\"is_private\":false,\"__typename\":\"XDTUserDict\"},\"coauthor_producers\":[],\"image_versions2\":{\"candidates\":[{\"url\":\"https://cdn.example.invalid/synthetic/SYNpath0003.jpg\",\"width\":640,\"height\":1136}]},\"video_versions\":[{\"url\":\"https://cdn.example.invalid/synthetic/SYNpath0003.mp4\",\"width\":480,\"height\":854}],\"caption\":{\"text\":\"Synthetic caption SYNpath0003\"},\"video_duration\":32}}],\"paging_info\":{\"max_id\":\"SYNTHETIC\",\"more_available\":true},\"status\":\"ok\"}"
+    }
+  ]
+}

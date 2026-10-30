@@ -1,0 +1,28 @@
+{
+  "_about": "A container and list shape never seen before; paging_info.more_available ends the list.",
+  "runs": [
+    {
+      "page": "/{owner}/reels/",
+      "reels": 3,
+      "reelCodes": [
+        "SYNcont0001",
+        "SYNcont0002",
+        "SYNcont0003"
+      ],
+      "with": {
+        "views": 3,
+        "likes": 3,
+        "comments": 3,
+        "date": 3
+      },
+      "hasNextPage": false,
+      "sort": {
+        "sortBy": "comments",
+        "limit": 50,
+        "codes": [],
+        "ranked": 3,
+        "first": "SYNcont0003"
+      }
+    }
+  ]
+}

@@ -42,10 +42,13 @@ function loadContent(opts) {
   let job = opts.job ? JSON.stringify(opts.job) : null;
   const sent = [];
   const loads = [];
+  const rulesAsks = [];
   const ticks = [];
   const opened = [];
   const files = [];
   const unanswered = [];
+  const timers = [];
+  const logged = [];
   const listeners = { message: [], runtime: [] };
   const chrome = {
     runtime: {
@@ -59,6 +62,13 @@ function loadContent(opts) {
           if (cb) cb({ ok: true, tabId: opts.tabId === undefined ? 7 : opts.tabId });
           return;
         }
+        // No rules in storage: content.js asks the worker. The answer is
+        // opts.rulesReply, or held until the test gives one with answerRules.
+        if (msg.type === "getRules") {
+          rulesAsks.push(cb);
+          if (opts.rulesReply !== undefined) cb(opts.rulesReply);
+          return;
+        }
         sent.push(msg);
         const reply = opts.onMessage ? opts.onMessage(msg, sent) : undefined;
         if (!cb) return;
@@ -70,7 +80,17 @@ function loadContent(opts) {
     storage: {
       local: {
         get(defaults, cb) { cb(Object.assign({}, defaults, store)); },
-        set(o) { Object.assign(store, o); },
+        // opts.storageError makes every write fail the way Chrome reports it.
+        set(o, cb) {
+          if (opts.storageError) {
+            chrome.runtime.lastError = { message: opts.storageError };
+            if (cb) cb();
+            chrome.runtime.lastError = undefined;
+            return;
+          }
+          Object.assign(store, o);
+          if (cb) cb();
+        },
         remove(k) { [].concat(k).forEach((key) => delete store[key]); }
       },
       onChanged: { addListener() {} }
@@ -81,7 +101,7 @@ function loadContent(opts) {
     document,
     MutationObserver,
     chrome,
-    console: { log() {}, warn() {} },
+    console: { log: (...a) => logged.push(a.join(" ")), warn: (...a) => logged.push("WARN " + a.join(" ")) },
     location: { href: "https://www.instagram.com/demo/reels/", pathname: "/demo/reels/", reload() {} },
     sessionStorage: {
       getItem: (k) => (k === "igSorterJob" ? job : null),
@@ -90,8 +110,9 @@ function loadContent(opts) {
     },
     // The profile watcher's tick, run by the test with page.tick().
     setInterval: (fn) => (ticks.push(fn), ticks.length),
-    // The 4s return-to-idle timer and the download cleanup never need to fire.
-    setTimeout: () => 0,
+    // Held, not run: the 4s return-to-idle timer and the download cleanup
+    // never need to fire; a test fires the ones it cares about by delay.
+    setTimeout: (fn, ms) => (timers.push({ fn, ms }), timers.length),
     TextEncoder,
     // Every download: the anchor content.js clicks names the file.
     Blob: class {
@@ -136,6 +157,11 @@ function loadContent(opts) {
     opened,
     lastFile,
     $: (id) => document.getElementById(id),
+    rulesAsks,
+    logged,
+    answerRules: (reply) => rulesAsks.forEach((cb) => cb(reply)),
+    // Fire the held timers set with this delay.
+    fireTimers: (ms) => timers.filter((t) => t.ms === ms).forEach((t) => t.fn()),
     // Answer a message the test held back.
     answer(type, reply) {
       const i = unanswered.findIndex((u) => u.msg.type === type);
@@ -396,61 +422,184 @@ test("signed out, then signs in to a Free account: the Upgrade dialog instead of
   assert.equal(page.document.querySelector(".igs-card"), null);
 });
 
-// ---- Free: the sorted grid says it's the recent reels ----
+// ---- Free: no date range anywhere ----
 
-test("a Free run's grid says how far back it reaches", () => {
+test("the sort state keeps the run's counts, for telling why it stopped where it did", () => {
   const page = loadContent();
-  page.result(posts, { days: 50 });
-  assert.match(page.$("ig-sorter-wrap").textContent, /· last 50 days/);
-  assert.equal(page.store.sortState.days, 50);
+  page.result(posts, {
+    reason: "stalled", responses: 30, hits: 3, unreadable: 2, hasNextPage: true,
+    stats: { reels: 40, foreign: 12, emptyReelsLists: 0, tooLarge: 0, unparsable: 0 }
+  });
+  assert.equal(page.store.sortState.reason, "stalled");
+  assert.deepEqual(JSON.parse(JSON.stringify(page.store.sortState.counts)), {
+    responses: 30, hits: 3, reels: 40, foreign: 12, unreadable: 2, hasNextPage: true
+  });
+});
+
+test("a sorted grid names no date range, and the state carries none", () => {
+  const page = loadContent();
+  page.result(posts, { reason: "complete" });
+  assert.doesNotMatch(page.$("ig-sorter-wrap").textContent, /last \d+ days/);
+  assert.equal("days" in page.store.sortState, false);
 });
 
 // ---- Sort state: no summary, only warnings, tied to this page ----
 
 test("a finished sort leaves no summary for the popup, only that it's done", () => {
-  for (const reason of ["complete", "end", "past_range", "stalled"]) {
+  for (const reason of ["complete", "end", "stalled"]) {
     const page = loadContent();
-    page.result(posts, { days: 50, reason });
+    page.result(posts, { reason });
     assert.equal(page.store.sortState.warning, null, reason);
     assert.equal(page.store.sortState.message, undefined, reason);
     assert.equal(page.store.sortState.count, 3);
   }
 });
 
-test("a Free run with only older reels warns that none were recent, not that Instagram broke", () => {
-  for (const reason of ["past_range", "end", "stalled", "timeout"]) {
+// Every reason code the collector can send, and the words the popup shows.
+const SAID = {
+  no_responses:
+    "Instagram didn't send anything while we scrolled — check your connection, reload the page and try again.",
+  responses_but_no_reels:
+    "No reels found. This profile may not have any reels, or Instagram may have changed something.",
+  reels_but_none_from_profile: "Couldn't read reels — Instagram may have changed something.",
+  profile_has_no_reels: "This profile hasn't posted any reels.",
+  wrong_page: "Open an Instagram profile's Reels tab to sort."
+};
+
+test("every empty-sort reason code is stored and put into words", () => {
+  for (const [code, words] of Object.entries(SAID)) {
     const page = loadContent();
-    page.result([], { days: 50, reason, seen: 4, total: 0 });
-    assert.equal(page.store.sortState.warning, "No reels from the last 50 days.", reason);
+    page.result([], { reason: "no_reels", total: 0, codes: [code] });
+    const st = page.store.sortState;
+    assert.equal(st.status, "stopped", code);
+    assert.deepEqual(st.codes, [code]);
+    assert.equal(st.warning, words, code);
   }
 });
 
-test("warnings: couldn't read reels, and the time limit", () => {
-  const unread = loadContent();
-  unread.result([], { reason: "no_reels", unreadable: 5, total: 0 });
-  assert.equal(unread.store.sortState.warning, "Couldn't read reels — Instagram may have changed something.");
+test("an empty sort without a code still says something", () => {
+  const page = loadContent();
+  page.result([], { reason: "no_reels", total: 0 });
+  assert.equal(page.store.sortState.warning, SAID.responses_but_no_reels);
+});
 
+test("partial sorts: the time limit, and a metric Instagram isn't sending", () => {
   const late = loadContent();
-  late.result(posts, { reason: "timeout", limitMs: 3 * 60 * 1000 });
+  late.result(posts, { reason: "timeout", limitMs: 3 * 60 * 1000, codes: ["stopped_time_limit"] });
   assert.equal(late.store.sortState.status, "stopped");
+  assert.deepEqual(late.store.sortState.codes, ["stopped_time_limit"]);
   assert.equal(late.store.sortState.warning, "Stopped at the 3-minute time limit — sorted the 3 reels collected by then.");
+
+  const noViews = loadContent();
+  noViews.result(posts, {
+    reason: "end", codes: ["reels_missing_metric"], missingMetric: "views", alternatives: ["likes", "comments"]
+  });
+  assert.equal(noViews.store.sortState.status, "done", "the sort still finished");
+  assert.equal(noViews.store.sortState.count, 3, "and the grid has every reel");
+  assert.equal(
+    noViews.store.sortState.warning,
+    "Instagram isn't sending views right now — try sorting by likes or comments."
+  );
+
+  const nothingElse = loadContent();
+  nothingElse.result(posts, { reason: "end", codes: ["reels_missing_metric"], missingMetric: "likes", alternatives: [] });
+  assert.equal(nothingElse.store.sortState.warning, "Instagram isn't sending likes right now.");
+
+  const both = loadContent();
+  both.result(posts, {
+    reason: "timeout", limitMs: 10 * 60 * 1000, codes: ["stopped_time_limit", "reels_missing_metric"],
+    missingMetric: "comments", alternatives: ["views"]
+  });
+  assert.deepEqual(both.store.sortState.codes, ["stopped_time_limit", "reels_missing_metric"]);
+  assert.equal(
+    both.store.sortState.warning,
+    "Stopped at the 10-minute time limit — sorted the 3 reels collected by then. " +
+      "Instagram isn't sending comments right now — try sorting by views."
+  );
+});
+
+// What the page got: the injected scripts, in order, and the rules on extract.js.
+function injected(page) {
+  const scripts = page.document.querySelectorAll("script");
+  const attr = scripts.length ? scripts[0].getAttribute("data-sortcut-rules") : null;
+  return {
+    paths: scripts.map((s) => s.src.replace("chrome-extension://test/", "")),
+    rules: attr === null ? null : JSON.parse(attr)
+  };
+}
+const ALL_SCRIPTS = ["lib/extract.js", "page/interceptor.js", "page/collector.js"];
+const RULES = { version: 7, fields: { views: ["play_count"] } };
+
+test("rules: handed to extract.js on its script element, straight from storage", () => {
+  const page = loadContent({ store: { rules: RULES } });
+  assert.deepEqual(injected(page), { paths: ALL_SCRIPTS, rules: RULES });
+  assert.equal(page.rulesAsks.length, 0, "the worker isn't asked");
+  assert.equal(page.document.querySelectorAll("script")[1].getAttribute("data-sortcut-rules"), null);
+});
+
+// The reload case: the extension was reloaded (or installed, or updated) and
+// its worker hasn't run since, so storage has every other key but no rules.
+const AFTER_RELOAD = { auth: {}, health: [], lastPlan: {}, lastRun: {}, sortState: null, transcribeStatus: {} };
+
+test("rules, after a reload: none stored, so the worker is asked and its copy is handed over", () => {
+  const page = loadContent({ store: Object.assign({}, AFTER_RELOAD) });
+  assert.equal(page.rulesAsks.length, 1, "asked once");
+  assert.deepEqual(injected(page).paths, [], "nothing injected while waiting");
+
+  page.answerRules({ ok: true, rules: RULES });
+  assert.deepEqual(injected(page), { paths: ALL_SCRIPTS, rules: RULES });
+
+  // The fallback timer firing afterwards changes nothing.
+  page.fireTimers(1000);
+  assert.equal(page.document.querySelectorAll("script").length, 3);
+});
+
+test("rules, after a reload: a stored copy without a version counts as none", () => {
+  const page = loadContent({ store: { rules: { fields: {} } }, rulesReply: { ok: true, rules: RULES } });
+  assert.equal(page.rulesAsks.length, 1);
+  assert.deepEqual(injected(page), { paths: ALL_SCRIPTS, rules: RULES });
+});
+
+test("rules, after a reload: a worker that doesn't answer in time doesn't hold the page up", () => {
+  const page = loadContent({ store: Object.assign({}, AFTER_RELOAD) });
+  page.fireTimers(1000);
+  assert.deepEqual(injected(page), { paths: ALL_SCRIPTS, rules: null }, "built-in copy, which the sort records");
+  // A late answer can't inject a second set.
+  page.answerRules({ ok: true, rules: RULES });
+  assert.equal(page.document.querySelectorAll("script").length, 3);
+});
+
+test("rules, after a reload: a worker error means the built-in copy, at once", () => {
+  for (const reply of [{ ok: false, error: "x" }, { ok: true, rules: null }, null]) {
+    const page = loadContent({ store: Object.assign({}, AFTER_RELOAD), rulesReply: reply });
+    assert.deepEqual(injected(page), { paths: ALL_SCRIPTS, rules: null }, JSON.stringify(reply));
+  }
+});
+
+test("rules: a sort on the built-in copy is recorded, not shown", () => {
+  const page = loadContent();
+  page.result(posts, { reason: "end", rules: { source: "builtin", version: 0, warning: "No rules were handed over; sorted with the built-in copy." } });
+  assert.equal(page.store.sortState.warning, null);
+  assert.equal(page.store.sortState.rulesWarning, "No rules were handed over; sorted with the built-in copy.");
+  assert.equal(page.store.health[0].rules, "builtin v0");
+  assert.equal(page.store.health[0].rulesWarning, "No rules were handed over; sorted with the built-in copy.");
 });
 
 test("startSort: the state and the job carry the tab, the profile and this page load", () => {
   const page = loadContent();
-  page.popup({ type: "startSort", sortBy: "views", limit: 300, days: 50, maxReels: 50, tabId: 7 });
+  page.popup({ type: "startSort", sortBy: "views", limit: 300, maxReels: 50, tabId: 7 });
   const s = page.store.sortState;
   assert.equal(s.tabId, 7);
   assert.equal(s.profile, "demo");
   assert.equal(s.loadId, page.popup({ type: "ping" }).loadId);
   assert.equal(s.target, 50, "Free's cap, not the 300 asked for");
-  assert.deepEqual({ ...page.job() }, { sortBy: "views", limit: 50, days: 50, maxReels: 50, tabId: 7 });
+  assert.deepEqual({ ...page.job() }, { sortBy: "views", limit: 50, maxReels: 50, tabId: 7, plan: "free" });
 });
 
-test("startSort on Pro: no cap, no range", () => {
+test("startSort on Pro: no cap", () => {
   const page = loadContent();
-  page.popup({ type: "startSort", sortBy: "views", limit: "all", days: null, maxReels: null, tabId: 7 });
-  assert.deepEqual({ ...page.job() }, { sortBy: "views", limit: "all", days: null, maxReels: null, tabId: 7 });
+  page.popup({ type: "startSort", sortBy: "views", limit: "all", maxReels: null, tabId: 7 });
+  assert.deepEqual({ ...page.job() }, { sortBy: "views", limit: "all", maxReels: null, tabId: 7, plan: "pro" });
 });
 
 test("page load: a plain load asks the worker to end this tab's old state", () => {
@@ -464,7 +613,7 @@ test("page load: the reload a sort started re-stamps the state with this load", 
   const old = { status: "running", tabId: 7, loadId: "before", profile: "demo", message: "Reloading…" };
   const page = loadContent({
     store: { sortState: old },
-    job: { sortBy: "views", limit: 50, days: 50, maxReels: 50, tabId: 7 }
+    job: { sortBy: "views", limit: 50, maxReels: 50, tabId: 7 }
   });
   assert.equal(page.loads[0].keep, true);
   const s = page.store.sortState;
@@ -680,4 +829,77 @@ test("Google Sheets gets the CSV export's text, columns and order, and nothing d
   assert.equal(r.count, 2);
   assert.equal("﻿" + r.csv, csv, "the CSV download, without its BOM");
   assert.equal(page.document.querySelectorAll("a").length, downloads, "no download");
+});
+
+// ---- The health log: every sort ----
+
+const plainJSON = (x) => JSON.parse(JSON.stringify(x));
+
+test("health log: every sort gets one entry, with what was asked, kept, left out, and why it stopped", () => {
+  const page = loadContent();
+  page.result(posts, {
+    sortBy: "views", depth: 50, plan: "pro", ranked: 2, total: 5, hits: 4, responses: 31, unreadable: 1,
+    reason: "end", codes: ["reels_missing_metric"], elapsedMs: 12400,
+    stats: { reels: 20, foreign: 13, duplicates: 2, emptyReelsLists: 0, tooLarge: 0, unparsable: 0 },
+    rules: { source: "content", version: 2, warning: null }
+  });
+  const e = plainJSON(page.store.health[0]);
+  assert.ok(Date.parse(e.at) > 0);
+  delete e.at;
+  assert.deepEqual(e, {
+    type: "sort", profile: "demo", plan: "pro", mode: "views", depth: 50,
+    kept: 3, seen: 5, overDepth: 2, notProfile: 13, noAuthor: 1, duplicates: 2, unranked: 1,
+    pages: 4, responses: 31, stop: "end", codes: ["reels_missing_metric"], seconds: 12,
+    rules: "content v2", rulesWarning: null
+  });
+});
+
+test("health log: empty, navigated-away and date sorts are logged too", () => {
+  const empty = loadContent();
+  empty.result([], { reason: "timeout", total: 0, codes: ["no_responses"] });
+  assert.equal(empty.store.health.length, 1);
+  assert.equal(empty.store.health[0].kept, 0);
+  assert.deepEqual(plainJSON(empty.store.health[0].codes), ["no_responses"]);
+
+  const gone = loadContent();
+  gone.result(posts, { reason: "navigated" });
+  assert.equal(gone.store.health[0].stop, "navigated");
+
+  const byDate = loadContent();
+  byDate.result(posts, { sortBy: "date", ranked: 0 });
+  assert.equal(byDate.store.health[0].unranked, 0, "a date sort ranks every reel");
+});
+
+test("health log: newest first, the last 50 kept, other keys untouched", () => {
+  const old = Array.from({ length: 50 }, (_, i) => ({ type: "sort", profile: "p" + i }));
+  const page = loadContent({ store: { health: old.slice(), lastRun: { count: 1 } } });
+  page.result(posts, {});
+  assert.equal(page.store.health.length, 50);
+  assert.equal(page.store.health[0].profile, "demo");
+  assert.equal(page.store.health[49].profile, "p48", "the oldest one dropped");
+});
+
+test("health log: no reels, captions, links or tokens in it", () => {
+  const page = loadContent({ store: { auth: { accessToken: "SECRET-TOKEN" } } });
+  page.result(
+    posts.map((p) => Object.assign({}, p, { caption: "a private caption", url: "https://www.instagram.com/p/" + p.code + "/" })),
+    { reason: "end" }
+  );
+  const text = JSON.stringify(page.store.health);
+  for (const p of posts) assert.ok(!text.includes(p.code), "no reel codes");
+  assert.ok(!/caption|instagram\.com|SECRET-TOKEN/.test(text), text);
+});
+
+test("health log: the tab's console says whether each sort was saved", () => {
+  const ok = loadContent();
+  ok.result(posts, { reason: "end" });
+  assert.ok(ok.logged.some((l) => /health log: sort saved \(3 reels, stop: end; 1 entries\)/.test(l)), ok.logged.join("\n"));
+
+  const broken = loadContent({ storageError: "QUOTA_BYTES quota exceeded" });
+  broken.result(posts, { reason: "end" });
+  assert.ok(
+    broken.logged.some((l) => /^WARN .*health log: couldn't save this sort .*QUOTA_BYTES/.test(l)),
+    broken.logged.join("\n")
+  );
+  assert.equal(broken.store.health, undefined);
 });

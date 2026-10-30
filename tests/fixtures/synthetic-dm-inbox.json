@@ -1,0 +1,29 @@
+{
+  "_fixture": "SYNTHETIC. DM traffic seen on /demo.creator/reels/: a GraphQL thread and a REST inbox page. Both share reels, one of them demo.creator's own, and each has a finished list (has_next_page / has_older false). DMs are never read: nothing may be kept, counted or allowed to touch hasNextPage. All made up.",
+  "page": "/demo.creator/reels/",
+  "capturedAt": "2026-10-01T00:00:00.000Z",
+  "userAgent": "SYNTHETIC",
+  "extensionVersion": "synthetic",
+  "graphqlBodies": [
+    {
+      "t": "2026-10-01T00:00:00.000Z",
+      "via": "fetch",
+      "url": "/api/graphql",
+      "status": 200,
+      "contentType": "text/javascript; charset=utf-8",
+      "length": 1597,
+      "truncated": false,
+      "body": "{\"data\":{\"xdt_direct_v2_thread\":{\"thread_id\":\"SYNTHETIC\",\"items\":[{\"item_type\":\"text\",\"text\":\"synthetic hello\"},{\"item_type\":\"clip\",\"clip\":{\"clip\":{\"pk\":\"3989615071704646650\",\"id\":\"3989615071704646650_9000000001\",\"code\":\"SYNdm000001\",\"product_type\":\"clips\",\"play_count\":180000,\"view_count\":null,\"like_count\":9000,\"comment_count\":360,\"media_type\":2,\"user\":{\"pk\":\"9000000001\",\"id\":\"9000000001\",\"username\":\"demo.creator\",\"full_name\":\"Synthetic demo.creator\",\"is_private\":false,\"__typename\":\"XDTUserDict\"},\"coauthor_producers\":[],\"image_versions2\":{\"candidates\":[{\"url\":\"https://cdn.example.invalid/synthetic/SYNdm000001.jpg\",\"width\":640,\"height\":1136}]},\"video_versions\":[{\"url\":\"https://cdn.example.invalid/synthetic/SYNdm000001.mp4\",\"width\":480,\"height\":854}],\"caption\":{\"text\":\"Synthetic caption SYNdm000001\"},\"video_duration\":33}}},{\"item_type\":\"clip\",\"clip\":{\"clip\":{\"pk\":\"3990339847435846651\",\"id\":\"3990339847435846651_9000000001\",\"code\":\"SYNdm000002\",\"product_type\":\"clips\",\"play_count\":190000,\"view_count\":null,\"like_count\":9500,\"comment_count\":380,\"media_type\":2,\"user\":{\"pk\":\"9000000001\",\"id\":\"9000000001\",\"username\":\"friend.account\",\"full_name\":\"Synthetic friend.account\",\"is_private\":false,\"__typename\":\"XDTUserDict\"},\"coauthor_producers\":[],\"image_versions2\":{\"candidates\":[{\"url\":\"https://cdn.example.invalid/synthetic/SYNdm000002.jpg\",\"width\":640,\"height\":1136}]},\"video_versions\":[{\"url\":\"https://cdn.example.invalid/synthetic/SYNdm000002.mp4\",\"width\":480,\"height\":854}],\"caption\":{\"text\":\"Synthetic caption SYNdm000002\"},\"video_duration\":34}}}],\"page_info\":{\"has_next_page\":false}}}}"
+    },
+    {
+      "t": "2026-10-01T00:00:00.000Z",
+      "via": "fetch",
+      "url": "/api/v1/direct_v2/inbox/?persistentBadging=true",
+      "status": 200,
+      "contentType": "text/javascript; charset=utf-8",
+      "length": 977,
+      "truncated": false,
+      "body": "{\"viewer\":{\"pk\":\"9000000001\",\"id\":\"9000000001\",\"username\":\"viewer.synthetic\",\"full_name\":\"Synthetic viewer.synthetic\",\"is_private\":false,\"__typename\":\"XDTUserDict\"},\"inbox\":{\"threads\":[{\"thread_id\":\"SYNTHETIC\",\"items\":[{\"item_type\":\"clip\",\"clip\":{\"clip\":{\"pk\":\"3991064623167046652\",\"id\":\"3991064623167046652_9000000001\",\"code\":\"SYNdm000003\",\"product_type\":\"clips\",\"play_count\":200000,\"view_count\":null,\"like_count\":10000,\"comment_count\":400,\"media_type\":2,\"user\":{\"pk\":\"9000000001\",\"id\":\"9000000001\",\"username\":\"demo.creator\",\"full_name\":\"Synthetic demo.creator\",\"is_private\":false,\"__typename\":\"XDTUserDict\"},\"coauthor_producers\":[],\"image_versions2\":{\"candidates\":[{\"url\":\"https://cdn.example.invalid/synthetic/SYNdm000003.jpg\",\"width\":640,\"height\":1136}]},\"video_versions\":[{\"url\":\"https://cdn.example.invalid/synthetic/SYNdm000003.mp4\",\"width\":480,\"height\":854}],\"caption\":{\"text\":\"Synthetic caption SYNdm000003\"},\"video_duration\":35}}}]}],\"has_older\":false},\"status\":\"ok\"}"
+    }
+  ]
+}

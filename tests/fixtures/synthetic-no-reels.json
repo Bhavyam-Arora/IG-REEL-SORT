@@ -1,0 +1,19 @@
+{
+  "_fixture": "SYNTHETIC. demo.creator's Reels tab when the profile has never posted a reel: an empty clips_connection that says there is no more. All made up.",
+  "page": "/demo.creator/reels/",
+  "capturedAt": "2026-10-01T00:00:00.000Z",
+  "userAgent": "SYNTHETIC",
+  "extensionVersion": "synthetic",
+  "graphqlBodies": [
+    {
+      "t": "2026-10-01T00:00:00.000Z",
+      "via": "fetch",
+      "url": "/api/graphql",
+      "status": 200,
+      "contentType": "text/javascript; charset=utf-8",
+      "length": 144,
+      "truncated": false,
+      "body": "{\"data\":{\"fetch__XDTUserDict\":{\"clips_connection\":{\"edges\":[],\"page_info\":{\"end_cursor\":\"SYNTHETIC\",\"has_next_page\":false}},\"id\":\"9000000001\"}}}"
+    }
+  ]
+}

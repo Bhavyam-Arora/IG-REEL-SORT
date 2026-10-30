@@ -113,7 +113,14 @@ test("inbox, highlights and suggested reels hold none of the target's reels", ()
   for (const b of bodies(fixture("synthetic-inbox-highlights.json"))) {
     const out = extract(b.json);
     assert.equal(out.posts.filter((p) => isTargetReel(p, "demo.creator")).length, 0);
-    // Each does carry a "no next page" flag — the trap the interceptor must avoid.
-    assert.equal(out.hasNextPage, false);
+    if (b.json.data.xdt_get_inbox_threads) {
+      // DMs are never read at all: no posts, no flags.
+      assert.equal(out.posts.length, 0);
+      assert.equal(out.pages.length, 0);
+    } else {
+      // The others do carry a "no next page" flag — the trap the interceptor
+      // must avoid.
+      assert.equal(out.hasNextPage, false);
+    }
   }
 });

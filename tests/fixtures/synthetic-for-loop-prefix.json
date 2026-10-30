@@ -1,0 +1,19 @@
+{
+  "_fixture": "SYNTHETIC. A Reels-tab page for demo.creator whose body starts with Instagram's anti-hijacking prefix \"for (;;);\". All made up.",
+  "page": "/demo.creator/reels/",
+  "capturedAt": "2026-10-01T00:00:00.000Z",
+  "userAgent": "SYNTHETIC",
+  "extensionVersion": "synthetic",
+  "graphqlBodies": [
+    {
+      "t": "2026-10-01T00:00:00.000Z",
+      "via": "fetch",
+      "url": "/api/graphql",
+      "status": 200,
+      "contentType": "text/javascript; charset=utf-8",
+      "length": 2363,
+      "truncated": false,
+      "body": "for (;;);{\"data\":{\"fetch__XDTUserDict\":{\"clips_connection\":{\"edges\":[{\"node\":{\"media\":{\"pk\":\"3982367314392646640\",\"id\":\"3982367314392646640_9000000001\",\"code\":\"SYNloop0001\",\"product_type\":\"clips\",\"play_count\":80000,\"view_count\":null,\"like_count\":4000,\"comment_count\":160,\"media_type\":2,\"user\":{\"pk\":\"9000000001\",\"id\":\"9000000001\",\"username\":\"demo.creator\",\"full_name\":\"Synthetic demo.creator\",\"is_private\":false,\"__typename\":\"XDTUserDict\"},\"coauthor_producers\":[],\"image_versions2\":{\"candidates\":[{\"url\":\"https://cdn.example.invalid/synthetic/SYNloop0001.jpg\",\"width\":640,\"height\":1136}]},\"video_versions\":[{\"url\":\"https://cdn.example.invalid/synthetic/SYNloop0001.mp4\",\"width\":480,\"height\":854}],\"caption\":{\"text\":\"Synthetic caption SYNloop0001\"},\"video_duration\":23},\"__typename\":\"XDTClipsItem\"},\"cursor\":\"c\"},{\"node\":{\"media\":{\"pk\":\"3983092090123846641\",\"id\":\"3983092090123846641_9000000001\",\"code\":\"SYNloop0002\",\"product_type\":\"clips\",\"play_count\":90000,\"view_count\":null,\"like_count\":4500,\"comment_count\":180,\"media_type\":2,\"user\":{\"pk\":\"9000000001\",\"id\":\"9000000001\",\"username\":\"demo.creator\",\"full_name\":\"Synthetic demo.creator\",\"is_private\":false,\"__typename\":\"XDTUserDict\"},\"coauthor_producers\":[],\"image_versions2\":{\"candidates\":[{\"url\":\"https://cdn.example.invalid/synthetic/SYNloop0002.jpg\",\"width\":640,\"height\":1136}]},\"video_versions\":[{\"url\":\"https://cdn.example.invalid/synthetic/SYNloop0002.mp4\",\"width\":480,\"height\":854}],\"caption\":{\"text\":\"Synthetic caption SYNloop0002\"},\"video_duration\":24},\"__typename\":\"XDTClipsItem\"},\"cursor\":\"c\"},{\"node\":{\"media\":{\"pk\":\"3983816865855046642\",\"id\":\"3983816865855046642_9000000001\",\"code\":\"SYNloop0003\",\"product_type\":\"clips\",\"play_count\":100000,\"view_count\":null,\"like_count\":5000,\"comment_count\":200,\"media_type\":2,\"user\":{\"pk\":\"9000000001\",\"id\":\"9000000001\",\"username\":\"demo.creator\",\"full_name\":\"Synthetic demo.creator\",\"is_private\":false,\"__typename\":\"XDTUserDict\"},\"coauthor_producers\":[],\"image_versions2\":{\"candidates\":[{\"url\":\"https://cdn.example.invalid/synthetic/SYNloop0003.jpg\",\"width\":640,\"height\":1136}]},\"video_versions\":[{\"url\":\"https://cdn.example.invalid/synthetic/SYNloop0003.mp4\",\"width\":480,\"height\":854}],\"caption\":{\"text\":\"Synthetic caption SYNloop0003\"},\"video_duration\":25},\"__typename\":\"XDTClipsItem\"},\"cursor\":\"c\"}],\"page_info\":{\"end_cursor\":\"SYNTHETIC\",\"has_next_page\":true}}}}}"
+    }
+  ]
+}

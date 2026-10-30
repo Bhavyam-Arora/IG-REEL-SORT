@@ -1,0 +1,25 @@
+{
+  "_about": "DMs, highlights and a suggested-reels rail: nothing kept, the list flag untouched.",
+  "runs": [
+    {
+      "page": "/{owner}/reels/",
+      "reels": 0,
+      "hasNextPage": true,
+      "hits": 0,
+      "responses": 3,
+      "unreadable": 0,
+      "stats": {
+        "reels": 2,
+        "foreign": 2,
+        "emptyReelsLists": 0
+      },
+      "sort": {
+        "sortBy": "views",
+        "limit": 50,
+        "codes": [
+          "reels_but_none_from_profile"
+        ]
+      }
+    }
+  ]
+}

@@ -7,11 +7,84 @@
 // The video is still downloaded here, with the user's own Instagram session;
 // only the file goes to Sortcut, which transcribes (and romanises) it with Groq.
 
-importScripts("lib/config.js", "lib/auth.js");
+importScripts("lib/config.js", "lib/auth.js", "lib/rules.js");
 
-chrome.runtime.onInstalled.addListener(function () {
-  console.log("[GridSorter] installed");
+// The health log, from this worker's DevTools console (chrome://extensions →
+// Sortcut → service worker): sortLog() prints the last 50 sorts, newest first,
+// as a table and returns them. content.js writes them to
+// chrome.storage.local.health; they stay on this machine. A function
+// declaration, so it's a global from the moment this script is parsed,
+// whatever runs after it.
+async function sortLog() {
+  var list = (await chrome.storage.local.get({ health: [] })).health || [];
+  console.table(
+    list.map(function (e) {
+      return Object.assign({}, e, { codes: (e.codes || []).join(" ") });
+    })
+  );
+  return list;
+}
+self.sortLog = sortLog;
+console.log("[GridSorter] worker started \u2014 run sortLog() to see the health log");
+
+// Same content, whatever the key order: chrome.storage hands objects back with
+// their keys sorted, so a plain JSON.stringify comparison never matches.
+function sameJson(a, b) {
+  function canon(v) {
+    if (Array.isArray(v)) return v.map(canon);
+    if (v && typeof v === "object") {
+      var out = {};
+      Object.keys(v).sort().forEach(function (k) { out[k] = canon(v[k]); });
+      return out;
+    }
+    return v;
+  }
+  return JSON.stringify(canon(a)) === JSON.stringify(canon(b));
+}
+
+// content.js hands the page scripts the rules from storage (it can't read
+// lib/rules.js itself), so the bundled copy has to be there. An MV3 worker only
+// runs when an event wakes it, so the copy is written on every occasion that
+// does: install and update (which includes Reload on chrome://extensions),
+// browser startup, any other wake-up, and on request — content.js asks with
+// getRules whenever it finds none and uses the reply. A stored copy with a
+// higher version is newer than this build's and stays.
+//
+// Resolves to the rules now in storage (the bundled copy if storage fails).
+// Writes queue behind each other, so a wake-up that fires several events at
+// once (start-up plus onInstalled) writes once.
+var rulesQueue = Promise.resolve();
+function mirrorRules(why) {
+  rulesQueue = rulesQueue.then(function () {
+    return writeRules(why);
+  });
+  return rulesQueue;
+}
+
+async function writeRules(why) {
+  try {
+    var stored = (await chrome.storage.local.get({ rules: null })).rules;
+    if (stored && typeof stored.version === "number" && stored.version > SORTCUT_RULES.version) return stored;
+    if (!sameJson(stored, SORTCUT_RULES)) {
+      await chrome.storage.local.set({ rules: SORTCUT_RULES });
+      console.log("[GridSorter] rules v" + SORTCUT_RULES.version + " stored (" + why + ")");
+    }
+  } catch (e) {
+    console.warn("[GridSorter] couldn't store the rules (" + why + ")", e);
+  }
+  return SORTCUT_RULES;
+}
+
+chrome.runtime.onInstalled.addListener(function (details) {
+  console.log("[GridSorter] installed (" + (details && details.reason) + ")");
+  mirrorRules("installed");
 });
+
+chrome.runtime.onStartup.addListener(function () {
+  mirrorRules("startup");
+});
+
+mirrorRules("worker start");
 
 // The public web client's app id. Not a secret and not rotated — every
 // instagram.com page sends it as a constant header.
@@ -348,11 +421,12 @@ function progressTo(sender, code) {
   };
 }
 
-// What the plan unlocks, for the popup and the page. Free sorts reach back
-// FREE_DAYS; Pro has the full history, the outlier sorts and transcription.
+// What the plan unlocks, for the popup and the page. Free sorts up to
+// FREE_MAX_REELS reels of any age; Pro has unlimited depth, the outlier sorts
+// and transcription.
 async function planInfo() {
   var plan = await currentPlan();
-  return { plan: plan, pro: PRO_PLANS[plan] === 1, freeDays: FREE_DAYS, freeMaxReels: FREE_MAX_REELS };
+  return { plan: plan, pro: PRO_PLANS[plan] === 1, freeMaxReels: FREE_MAX_REELS };
 }
 
 // ---- Sort state ----
@@ -558,6 +632,12 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
   }
   // From the page's sign-in dialog. Unlike the popup's signIn it doesn't load
   // /v1/me afterwards: the transcription it was opened for is the next call.
+  // content.js found no rules in storage: write them and hand them back.
+  if (msg.type === "getRules") {
+    return reply(mirrorRules("asked"), sendResponse, function (rules) {
+      return { ok: true, rules: rules };
+    });
+  }
   if (msg.type === "pageSignIn") {
     return reply(signIn(), sendResponse, function () { return { ok: true }; });
   }

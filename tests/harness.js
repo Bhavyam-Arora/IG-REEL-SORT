@@ -20,8 +20,24 @@ function fixture(name) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
+// lib/rules.js as the worker loads it: a plain object.
+function bundledRules() {
+  const ctx = {};
+  vm.createContext(ctx);
+  vm.runInContext(source("lib/rules.js"), ctx, { filename: "lib/rules.js" });
+  return JSON.parse(JSON.stringify(vm.runInContext("SORTCUT_RULES", ctx)));
+}
+
+// Each captured response: its address and raw body. json is the parsed body,
+// read only when asked for — some bodies aren't plain JSON on purpose.
 function bodies(sample) {
-  return sample.graphqlBodies.map((b) => ({ url: b.url, text: b.body, json: JSON.parse(b.body) }));
+  return sample.graphqlBodies.map((b) => ({
+    url: b.url,
+    text: b.body,
+    get json() {
+      return JSON.parse(b.body);
+    }
+  }));
 }
 
 function tick() {
@@ -30,6 +46,10 @@ function tick() {
 
 // A page at `href` with extract.js and interceptor.js loaded, and optionally
 // collector.js with a sort job waiting for it.
+//
+// The rules reach extract.js the way content.js hands them over: as JSON on
+// its <script> element. opts.rules replaces the bundled copy; null hands over
+// nothing, as when storage had none.
 //
 // Time is fake: every setTimeout advances the page's clock by its delay and
 // fires on the next tick, so a 10-minute run takes milliseconds. onScroll runs
@@ -42,6 +62,11 @@ function loadPage(href, opts) {
   const listeners = [];
   if (opts.job) session.igSorterJob = JSON.stringify(opts.job);
 
+  const rules = opts.rules === undefined ? bundledRules() : opts.rules;
+  const currentScript = {
+    getAttribute: (name) => (name === "data-sortcut-rules" && rules !== null ? JSON.stringify(rules) : null)
+  };
+
   function XMLHttpRequest() {}
   XMLHttpRequest.prototype.open = function () {};
   XMLHttpRequest.prototype.send = function () {};
@@ -52,12 +77,15 @@ function loadPage(href, opts) {
     location: { href, pathname: new URL(href).pathname },
     navigator: { userAgent: "node-test" },
     XMLHttpRequest,
-    // The "network": a test passes the body it wants Instagram to return.
+    URL,
+    // The "network": a test passes the body it wants Instagram to return, and
+    // optionally the response headers.
     fetch(input, init) {
       const text = (init && init.body) || "";
+      const headers = Object.assign({ "content-type": "application/json" }, init && init.responseHeaders);
       return Promise.resolve({
         status: 200,
-        headers: { get: () => "application/json" },
+        headers: { get: (h) => (h.toLowerCase() in headers ? String(headers[h.toLowerCase()]) : null) },
         clone() {
           return this;
         },
@@ -87,7 +115,7 @@ function loadPage(href, opts) {
       setItem: (k, v) => (session[k] = String(v)),
       removeItem: (k) => delete session[k]
     },
-    document: { body: { scrollHeight: 1000 } },
+    document: { body: { scrollHeight: 1000 }, currentScript },
     scrolls: 0,
     scrollTo(x, y) {
       if (y === 0) return; // back to the top at the end of a run
@@ -113,8 +141,8 @@ function loadPage(href, opts) {
 
 // Hand the page a response as if Instagram had fetched `url`, and wait for the
 // interceptor to finish reading it.
-async function respond(w, url, text) {
-  await w.fetch(url, { body: text });
+async function respond(w, url, text, responseHeaders) {
+  await w.fetch(url, { body: text, responseHeaders });
   await tick();
   await tick();
 }
@@ -148,4 +176,4 @@ function reel(owner, extra) {
   );
 }
 
-module.exports = { loadPage, respond, result, fixture, bodies, reel, tick };
+module.exports = { loadPage, respond, result, fixture, bodies, bundledRules, reel, tick, FIXTURES };

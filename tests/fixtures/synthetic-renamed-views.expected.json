@@ -1,0 +1,23 @@
+{
+  "_about": "Views found under ig_play_count / video_view_count / video_play_count; older edge_* names for the rest.",
+  "runs": [
+    {
+      "page": "/{owner}/reels/",
+      "reels": 4,
+      "with": {
+        "views": 4,
+        "likes": 4,
+        "comments": 4,
+        "date": 4
+      },
+      "hasNextPage": true,
+      "sort": {
+        "sortBy": "views",
+        "limit": 50,
+        "codes": [],
+        "ranked": 4,
+        "first": "SYNview0004"
+      }
+    }
+  ]
+}

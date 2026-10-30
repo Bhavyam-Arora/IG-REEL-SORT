@@ -48,7 +48,7 @@ function loadPopup(opts) {
   const toWorker = [];
   const changed = [];
   const plan = () => ({
-    plan: opts.pro ? "pro_monthly" : "none", pro: !!opts.pro, freeDays: 50, freeMaxReels: 50
+    plan: opts.pro ? "pro_monthly" : "none", pro: !!opts.pro, freeMaxReels: 50
   });
   const account = () => {
     const signedIn = opts.signedIn !== false;
@@ -172,7 +172,7 @@ test("Free: no Pro notes anywhere but the one Upgrade link in Account", () => {
   }
 });
 
-test("Free: a sort starts with the last 50 days and at most 50 reels", () => {
+test("Free: a sort starts capped at 50 reels, with no date range", () => {
   for (const mode of ["views", "likes", "comments"]) {
     for (const limit of ["25", "50"]) {
       const p = loadPopup({ pro: false });
@@ -180,7 +180,7 @@ test("Free: a sort starts with the last 50 days and at most 50 reels", () => {
       p.choose("limit", limit);
       p.$("go").click();
       assert.deepEqual({ ...p.starts()[0] }, {
-        type: "startSort", sortBy: mode, limit: Number(limit), days: 50, maxReels: 50, tabId: 7
+        type: "startSort", sortBy: mode, limit: Number(limit), maxReels: 50, tabId: 7
       });
     }
   }
@@ -197,14 +197,14 @@ test("Pro: every choice enabled, unmarked, depth default unchanged", () => {
   assert.equal(p.$("upgrade").hidden, true);
 });
 
-test("Pro: every sort and depth starts, with the full history and no cap", () => {
+test("Pro: every sort and depth starts, with no cap", () => {
   for (const mode of ["views", "likes", "comments", ...OUTLIERS]) {
     const p = loadPopup({ pro: true });
     p.choose("sortBy", mode);
     p.choose("limit", "all");
     p.$("go").click();
     assert.deepEqual({ ...p.starts()[0] }, {
-      type: "startSort", sortBy: mode, limit: "all", days: null, maxReels: null, tabId: 7
+      type: "startSort", sortBy: mode, limit: "all", maxReels: null, tabId: 7
     });
   }
 });
@@ -249,7 +249,7 @@ test("a plan that lapses before Sort is clicked: the run uses allowed choices", 
   p.setPlan({ pro: false });
   p.$("go").click();
   assert.deepEqual({ ...p.starts()[0] }, {
-    type: "startSort", sortBy: "views", limit: 50, days: 50, maxReels: 50, tabId: 7
+    type: "startSort", sortBy: "views", limit: 50, maxReels: 50, tabId: 7
   });
 });
 
@@ -267,7 +267,7 @@ test("a finished sort shows no summary, Free or Pro", () => {
     const p = loadPopup({
       pro,
       ping: { ok: true, have: 13, sorted: true, loadId: "L1" },
-      store: { sortState: here({ status: "done", count: 13, days: pro ? null : 50, warning: null }) }
+      store: { sortState: here({ status: "done", count: 13, warning: null }) }
     });
     assert.equal(p.status(), null);
     assert.doesNotMatch(p.text(), /Sorted|last 50 days|full history/);
@@ -285,7 +285,7 @@ test("a running sort on this page shows its progress and holds the Sort button",
 
 test("warnings for this page show once the sort is over", () => {
   for (const warning of [
-    "No reels from the last 50 days.",
+    "This profile hasn't posted any reels.",
     "Couldn't read reels — Instagram may have changed something.",
     "Stopped at the 3-minute time limit — sorted the 87 reels collected by then."
   ]) {
@@ -299,7 +299,7 @@ test("warnings for this page show once the sort is over", () => {
 test("the wrong page says so, and shows no sort", () => {
   const p = loadPopup({
     url: "https://www.instagram.com/demo.creator/",
-    store: { sortState: here({ status: "stopped", warning: "No reels from the last 50 days." }) }
+    store: { sortState: here({ status: "stopped", warning: "This profile hasn't posted any reels." }) }
   });
   assert.equal(p.$("pageNote").hidden, false);
   assert.match(p.$("pageNote").textContent, /Open this profile's Reels tab/);

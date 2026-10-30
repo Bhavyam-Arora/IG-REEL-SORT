@@ -1,0 +1,25 @@
+{
+  "_about": "DMs are never read: nothing kept, nothing counted as a reel, the list flag untouched.",
+  "runs": [
+    {
+      "page": "/{owner}/reels/",
+      "reels": 0,
+      "hasNextPage": true,
+      "hits": 0,
+      "responses": 2,
+      "unreadable": 0,
+      "stats": {
+        "reels": 0,
+        "foreign": 0,
+        "emptyReelsLists": 0
+      },
+      "sort": {
+        "sortBy": "views",
+        "limit": 50,
+        "codes": [
+          "responses_but_no_reels"
+        ]
+      }
+    }
+  ]
+}
