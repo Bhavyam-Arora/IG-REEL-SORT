@@ -257,6 +257,46 @@ name only (no reels, captions, links or tokens):
 | `codes` | reason codes (see "Why a sort failed") |
 | `seconds`, `rules`, `rulesWarning` | how long it ran; which rules it ran on |
 
+## Error reports
+
+After a sort fails in a way that may mean Instagram changed something, the
+popup's failure card asks whether to send an anonymous error report. Nothing is
+sent unless **Send report** is clicked; there is no "always send". **What's
+sent?** shows the exact report first.
+
+- **When it asks:** the sort ended with `no_responses`,
+  `responses_but_no_reels`, `reels_but_none_from_profile` or
+  `reels_missing_metric`, on a profile's Reels tab whose reels the user can
+  see. Never after a successful, cancelled, plan-limited, wrong-page or
+  empty-profile sort.
+- **Can the user see the reels:** either Instagram said the profile is public,
+  or Instagram said nothing and the page shows at least 3 of the profile's
+  reel thumbnails (links to `/<profile>/reel/…` or `/p/…` in Instagram's own
+  grid, counted before the sorted grid goes in). A profile Instagram said is
+  private is never offered. "Said" means the interceptor read `is_private` from
+  the profile's own account object (`username` = the Reels tab owner) in a
+  response Instagram already sent: the profile response on page load, or one
+  of the profile's reels. It makes no request of its own. The thumbnail check
+  is there for a break that takes `is_private` with it.
+- **What's sent:** `POST {API_BASE}/v1/reports` with exactly 10 fields:
+  `reason`, `extensionVersion`, `rulesVersion`, `rulesSource`, `browser`,
+  `browserMajor`, `responsesSeen`, `postsFound`, `scrolls`, `durationMs`.
+  No profile name, URL, reel, user id or token. It goes from the service
+  worker without the sign-in or cookies, with an 8-second timeout. A failed send is
+  dropped quietly and never retried.
+- **Limits** (`chrome.storage.local.reportLimits`, per local day): one per
+  reason and three in all. At a limit the question isn't shown. An offer is
+  answered once (`reportAnswered`), so reopening the popup doesn't ask again.
+
+The health log is never sent. It stays on this machine.
+
+**Testing it** (off by default, like developer capture): in the service
+worker console run `chrome.storage.local.set({ devForceFailure: "no_responses" })`
+(or any of the four codes), reload the Instagram tab, and sort. That sort
+collects as normal, then ends with that code, so the failure card and the
+report question appear. Any other value does nothing. The key removes itself
+after one use. The daily limits still apply.
+
 ## Developer capture
 
 A hidden tool for diagnosing breakage: it keeps the last few raw GraphQL
@@ -343,9 +383,10 @@ After any code change, click the reload arrow on the extension card.
 3. Match data by shape, not by name.
 4. Sorting and exports never touch any server — they run entirely in the
    browser. Only transcription goes through Sortcut's server, which holds the
-   one Groq key and checks your plan. The one other call is the plan lookup
+   one Groq key and checks your plan. The other calls are the plan lookup
    (`/v1/me`), made only when signed in, which sends nothing about what you
-   sort.
+   sort, and the anonymous error report, sent only when the user clicks Send
+   report (see "Error reports").
 5. Read-only. Never like, follow, comment, or post.
 
 ## Not affiliated with or endorsed by Instagram or Meta.

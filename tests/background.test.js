@@ -109,6 +109,17 @@ function loadWorker(opts) {
     run: (code) => vm.runInContext(code, w),
     send: (msg) =>
       new Promise((resolve) => onMessage(msg, { tab: { id: 1 }, frameId: 0 }, resolve)),
+    // A message from the popup (no tab). Resolves to undefined when the worker
+    // doesn't answer at all.
+    fromPopup: (msg) =>
+      new Promise((resolve) => {
+        if (onMessage(msg, { id: "test", url: "chrome-extension://test/popup.html" }, resolve) !== true) resolve(undefined);
+      }),
+    // The same message from a tab: a content script, or a page that got one to send it.
+    fromTab: (msg) =>
+      new Promise((resolve) => {
+        if (onMessage(msg, { tab: { id: 1 }, frameId: 0 }, resolve) !== true) resolve(undefined);
+      }),
     closeTab: (tabId) => onRemoved(tabId),
     // Chrome waking the worker for runtime.onInstalled / onStartup.
     installed: (reason) => lifecycle.installed.forEach((fn) => fn({ reason })),
@@ -613,4 +624,212 @@ test("rules: a stored copy with the same content in another key order isn't rewr
   sw.installed("update");
   await settled();
   assert.equal(sw.local.rules, reordered, "the stored object is the one that was there");
+});
+
+// ---- Error reports ----
+
+const REPORTS = "/v1/reports";
+// POST /v1/reports's rules (sortcut-backend src/shared/config.js REPORT_FIELDS):
+// exactly these fields, each valid, nothing else.
+const REPORT_SPEC = {
+  reason: (v) => ["no_responses", "responses_but_no_reels", "reels_but_none_from_profile", "reels_missing_metric"].includes(v),
+  extensionVersion: (v) => typeof v === "string" && /^\d{1,5}(\.\d{1,5}){0,3}$/.test(v) && v.split(".").every((p) => +p <= 65535),
+  rulesVersion: (v) => Number.isInteger(v) && v >= 0 && v <= 1e9,
+  rulesSource: (v) => ["builtin", "remote"].includes(v),
+  browser: (v) => ["chrome", "edge", "brave", "arc", "other"].includes(v),
+  browserMajor: (v) => Number.isInteger(v) && v >= 0 && v <= 1000,
+  responsesSeen: (v) => Number.isInteger(v) && v >= 0 && v <= 10000,
+  postsFound: (v) => Number.isInteger(v) && v >= 0 && v <= 10000,
+  scrolls: (v) => Number.isInteger(v) && v >= 0 && v <= 1000,
+  durationMs: (v) => Number.isInteger(v) && v >= 0 && v <= 600000
+};
+function assertValidReport(body) {
+  assert.deepEqual(Object.keys(body).sort(), Object.keys(REPORT_SPEC).sort());
+  for (const [k, ok] of Object.entries(REPORT_SPEC)) assert.ok(ok(body[k]), k + ": " + JSON.stringify(body[k]));
+}
+
+// An offer as content.js puts it in the sort state.
+const offer = (o) => Object.assign({
+  id: "L1", reason: "responses_but_no_reels", rulesSource: "builtin", rulesVersion: 2,
+  responsesSeen: 14, postsFound: 0, scrolls: 11, durationMs: 31234, arc: false
+}, o);
+
+const CHROME_NAV = {
+  userAgent: "Mozilla/5.0 (Macintosh) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+  userAgentData: { brands: [{ brand: "Google Chrome", version: "141" }, { brand: "Chromium", version: "141" }, { brand: "Not_A Brand", version: "24" }] }
+};
+
+// A signed-in worker whose /v1/reports answers with `route` (202 by default).
+function reportWorker(opts) {
+  opts = opts || {};
+  const sent = [];
+  const sw = loadWorker({
+    local: opts.local,
+    routes: Object.assign({ [ME]: me("pro_monthly") }, {
+      [REPORTS]: (url, init) => (sent.push({ url, init }), opts.route ? opts.route(url, init) : res(202, { body: "" }))
+    })
+  });
+  sw.local.auth = { accessToken: "ACCESS-SECRET", refreshToken: "REFRESH-SECRET", accessExpiresAt: Date.now() + HOUR };
+  sw.run("self.navigator = " + JSON.stringify(opts.navigator || CHROME_NAV));
+  sw.reports = sent;
+  return sw;
+}
+
+test("report: the preview is exactly the 10 fields the backend accepts, and sends nothing", async () => {
+  const sw = reportWorker();
+  const r = await sw.fromPopup({ type: "reportPreview", offer: offer() });
+  assert.equal(r.ok, true);
+  assert.equal(r.allowed, true);
+  assertValidReport(r.report);
+  assert.deepEqual({ ...r.report }, {
+    reason: "responses_but_no_reels", extensionVersion: MANIFEST.version, rulesVersion: 2, rulesSource: "builtin",
+    browser: "chrome", browserMajor: 141, responsesSeen: 14, postsFound: 0, scrolls: 11, durationMs: 31234
+  });
+  assert.equal(sw.reports.length, 0, "a preview is never a send");
+  assert.equal(sw.local.reportLimits, undefined, "nor counted");
+});
+
+test("report: Send posts exactly the previewed fields, no auth header and no cookies, signed in or not", async () => {
+  const sw = reportWorker();
+  // Extra keys an offer might carry never reach the report.
+  const o = offer({ profile: "demo.creator", url: "https://www.instagram.com/demo.creator/reels/", userId: "g_123", token: "ACCESS-SECRET" });
+  const preview = (await sw.fromPopup({ type: "reportPreview", offer: o })).report;
+  const r = await sw.fromPopup({ type: "sendReport", offer: o });
+  assert.deepEqual({ ...r }, { ok: true, sent: true });
+  assert.equal(sw.reports.length, 1);
+  const { url, init } = sw.reports[0];
+  assert.match(url, /^https:\/\/[^/]+\/v1\/reports$/);
+  assert.equal(init.method, "POST");
+  assert.equal(init.credentials, "omit");
+  assert.deepEqual(Object.keys(init.headers).map((h) => h.toLowerCase()), ["content-type"]);
+  assert.equal(init.headers["Content-Type"], "application/json");
+  const body = JSON.parse(init.body);
+  assertValidReport(body);
+  assert.deepEqual(body, JSON.parse(JSON.stringify(preview)), "what's shown is what's sent");
+  assert.doesNotMatch(init.body, /demo|instagram|g_123|SECRET|token|profile|url/i);
+  assert.ok(init.body.length <= 2048, "inside the backend's 2 KB");
+});
+
+test("report: nothing is sent without the click, and never on a tab's say-so", async () => {
+  const sw = reportWorker();
+  await sw.run("rulesQueue");
+  assert.equal(sw.reports.length, 0, "not on worker start");
+  assert.equal(await sw.fromTab({ type: "sendReport", offer: offer() }), undefined);
+  assert.equal(await sw.fromTab({ type: "reportPreview", offer: offer() }), undefined);
+  assert.equal(sw.reports.length, 0);
+});
+
+test("report: only the four reasons; anything else is neither offered nor sent", async () => {
+  const sw = reportWorker();
+  for (const reason of ["wrong_page", "profile_has_no_reels", "stopped_time_limit", "navigated", undefined]) {
+    const r = await sw.fromPopup({ type: "reportPreview", offer: offer({ reason }) });
+    assert.equal(r.allowed, false, String(reason));
+    assert.equal(r.report, null);
+    await sw.fromPopup({ type: "sendReport", offer: offer({ reason }) });
+  }
+  assert.equal(await sw.fromPopup({ type: "reportPreview" }).then((r) => r.allowed), false, "no offer at all");
+  assert.equal(sw.reports.length, 0);
+});
+
+test("report: counts past the backend's ranges are capped, never sent out of range", async () => {
+  const sw = reportWorker();
+  const r = await sw.fromPopup({
+    type: "reportPreview",
+    offer: offer({ responsesSeen: 25000, postsFound: -3, scrolls: 1400.6, durationMs: 3600000, rulesVersion: "x" })
+  });
+  assertValidReport(r.report);
+  assert.equal(r.report.responsesSeen, 10000);
+  assert.equal(r.report.postsFound, 0);
+  assert.equal(r.report.scrolls, 1000);
+  assert.equal(r.report.durationMs, 600000);
+  assert.equal(r.report.rulesVersion, 0);
+});
+
+test("report limits: one per reason per day, then the question isn't asked", async () => {
+  const sw = reportWorker();
+  await sw.fromPopup({ type: "sendReport", offer: offer({ id: "L1" }) });
+  const again = await sw.fromPopup({ type: "reportPreview", offer: offer({ id: "L2" }) });
+  assert.equal(again.allowed, false);
+  assert.equal(again.report, null);
+  assert.deepEqual({ ...(await sw.fromPopup({ type: "sendReport", offer: offer({ id: "L2" }) })) }, { ok: true, sent: false });
+  assert.equal(sw.reports.length, 1);
+  // Another reason the same day is still fine.
+  assert.equal((await sw.fromPopup({ type: "reportPreview", offer: offer({ id: "L3", reason: "no_responses" }) })).allowed, true);
+});
+
+test("report limits: three a day in all, and a new day starts again", async () => {
+  const sw = reportWorker();
+  const reasons = ["no_responses", "responses_but_no_reels", "reels_but_none_from_profile"];
+  for (const [i, reason] of reasons.entries()) await sw.fromPopup({ type: "sendReport", offer: offer({ id: "L" + i, reason }) });
+  assert.equal(sw.reports.length, 3);
+  const fourth = offer({ id: "L9", reason: "reels_missing_metric" });
+  assert.equal((await sw.fromPopup({ type: "reportPreview", offer: fourth })).allowed, false);
+  await sw.fromPopup({ type: "sendReport", offer: fourth });
+  assert.equal(sw.reports.length, 3);
+  assert.equal(sw.local.reportLimits.total, 3);
+
+  // Kept in local storage, by local day: yesterday's counts don't hold today back.
+  sw.local.reportLimits = { ...sw.local.reportLimits, day: "2000-01-01" };
+  assert.equal((await sw.fromPopup({ type: "reportPreview", offer: fourth })).allowed, true);
+  await sw.fromPopup({ type: "sendReport", offer: fourth });
+  assert.equal(sw.reports.length, 4);
+  assert.equal(sw.local.reportLimits.total, 1);
+});
+
+test("report: an offer is answered once; No thanks sends nothing and doesn't ask again", async () => {
+  const sw = reportWorker();
+  assert.deepEqual({ ...(await sw.fromPopup({ type: "declineReport", offer: offer({ id: "L1" }) })) }, { ok: true });
+  assert.equal((await sw.fromPopup({ type: "reportPreview", offer: offer({ id: "L1" }) })).allowed, false);
+  assert.equal(sw.reports.length, 0);
+  assert.equal(sw.local.reportLimits, undefined, "declining isn't counted against the limits");
+  // A sent one isn't offered again either, and a second click doesn't send twice.
+  await sw.fromPopup({ type: "sendReport", offer: offer({ id: "L2", reason: "no_responses" }) });
+  await sw.fromPopup({ type: "sendReport", offer: offer({ id: "L2", reason: "no_responses" }) });
+  assert.equal(sw.reports.length, 1);
+});
+
+test("report: a failed, refused or slow send is silent and never retried", async () => {
+  const down = reportWorker({ route: () => { throw new TypeError("Failed to fetch"); } });
+  assert.deepEqual({ ...(await down.fromPopup({ type: "sendReport", offer: offer() })) }, { ok: true, sent: true });
+  assert.equal(down.reports.length, 1);
+  assert.deepEqual(down.warnings, []);
+
+  const refused = reportWorker({ route: () => res(400, { body: { error: "bad" } }) });
+  assert.equal((await refused.fromPopup({ type: "sendReport", offer: offer() })).ok, true);
+  assert.equal(refused.reports.length, 1);
+
+  const hang = (url, init) =>
+    new Promise((resolve, reject) => init.signal.addEventListener("abort", () => reject(new Error("aborted"))));
+  const slow = reportWorker({ route: hang });
+  assert.equal(slow.run("REPORT_TIMEOUT_MS"), 8000);
+  slow.run("REPORT_TIMEOUT_MS = 20");
+  assert.deepEqual({ ...(await slow.fromPopup({ type: "sendReport", offer: offer() })) }, { ok: true, sent: true });
+  assert.equal(slow.reports.length, 1);
+  assert.equal(slow.local.reportLimits.total, 1, "a failed send still counts toward the day's limits");
+});
+
+test("report: the browser, named the backend's way, with its major version", async () => {
+  const ua = (s) => "Mozilla/5.0 (Macintosh) AppleWebKit/537.36 (KHTML, like Gecko) " + s;
+  const cases = [
+    ["chrome", 141, CHROME_NAV, false],
+    ["edge", 140, { userAgent: ua("Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0"),
+      userAgentData: { brands: [{ brand: "Microsoft Edge", version: "140" }, { brand: "Chromium", version: "140" }] } }, false],
+    ["edge", 139, { userAgent: ua("Chrome/139.0.0.0 Safari/537.36 Edg/139.0.0.0") }, false],
+    ["brave", 141, { userAgent: ua("Chrome/141.0.0.0 Safari/537.36"),
+      userAgentData: { brands: [{ brand: "Brave", version: "141" }, { brand: "Chromium", version: "141" }] } }, false],
+    ["brave", 141, { userAgent: ua("Chrome/141.0.0.0 Safari/537.36"), brave: {},
+      userAgentData: { brands: [{ brand: "Chromium", version: "141" }] } }, false],
+    ["arc", 141, CHROME_NAV, true],
+    ["other", 141, { userAgent: ua("Chrome/141.0.0.0 Safari/537.36"),
+      userAgentData: { brands: [{ brand: "Chromium", version: "141" }, { brand: "Opera", version: "125" }] } }, false],
+    ["other", 141, { userAgent: ua("Chrome/141.0.0.0 Safari/537.36") }, false],
+    ["other", 0, {}, false]
+  ];
+  for (const [browser, major, navigator, arc] of cases) {
+    const sw = reportWorker({ navigator });
+    const r = (await sw.fromPopup({ type: "reportPreview", offer: offer({ arc }) })).report;
+    assert.equal(r.browser, browser, JSON.stringify(navigator));
+    assert.equal(r.browserMajor, major, JSON.stringify(navigator));
+    assertValidReport(r);
+  }
 });

@@ -44,6 +44,20 @@
 
     <div id="pageNote" class="status bad" role="alert" hidden></div>
     <div id="status" class="status" role="status" hidden></div>
+    <!-- Joined to the status card below a failed sort. Nothing is sent unless Send report is clicked. -->
+    <div id="report" class="status bad report" role="group" aria-label="Error report" hidden>
+      <p class="report-title">Sort didn't work &mdash; Instagram may have changed something.</p>
+      <div id="reportAsk">
+        <p>Send an anonymous error report? It only includes the error type, version numbers and browser &mdash; no profile names or data.</p>
+        <div class="report-actions">
+          <button id="reportSend" class="ghost">Send report</button>
+          <button id="reportNo" class="ghost">No thanks</button>
+        </div>
+        <button id="reportWhat" class="link" aria-expanded="false">What's sent?</button>
+        <pre id="reportBody" class="report-body" hidden></pre>
+      </div>
+      <p id="reportThanks" class="report-thanks" hidden>Thanks &mdash; report sent.</p>
+    </div>
     <div id="txStatus" class="status" role="status" hidden></div>
 
     <div class="exports">

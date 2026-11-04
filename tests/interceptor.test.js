@@ -191,3 +191,70 @@ test("the profile's reels sent again are counted as duplicates, kept once", asyn
   assert.equal(buffered(w).length, 4);
   assert.equal(w.__IG_SORTER_STATS__.duplicates, 4);
 });
+
+// ---- Is the profile private? (for the error report offer only) ----
+
+const profileReply = (user) => JSON.stringify({ data: { user: Object.assign({ pk: "9", full_name: "x" }, user) } });
+const privacy = (w) => (w.__IG_SORTER_PROFILE_PRIVATE__ ? { ...w.__IG_SORTER_PROFILE_PRIVATE__ } : null);
+
+// An Instagram XHR, answered with `text`. The harness's XHR does nothing, so
+// the interceptor's load listener is run by hand.
+function xhr(w, url, text) {
+  const x = new w.XMLHttpRequest();
+  let onLoad = null;
+  x.addEventListener = (type, fn) => type === "load" && (onLoad = fn);
+  x.open("POST", url);
+  x.send();
+  x.responseType = "";
+  x.responseText = text;
+  x.status = 200;
+  x.getResponseHeader = () => "application/json";
+  onLoad.call(x);
+}
+
+test("privacy: Instagram's profile response says public or private, for this Reels tab's owner only", async () => {
+  const pub = loadPage(REELS_TAB);
+  assert.equal(privacy(pub), null, "unknown until Instagram says");
+  await respond(pub, "/api/graphql", profileReply({ username: "demo.creator", is_private: false }));
+  assert.deepEqual(privacy(pub), { owner: "demo.creator", isPrivate: false });
+
+  const priv = loadPage(REELS_TAB);
+  await respond(priv, "/api/graphql", profileReply({ username: "Demo.Creator", is_private: true }));
+  assert.deepEqual(privacy(priv), { owner: "demo.creator", isPrivate: true });
+
+  // Another account's object, a missing flag or a flag that isn't a boolean says nothing.
+  const other = loadPage(REELS_TAB);
+  await respond(other, "/api/graphql", profileReply({ username: "other.studio", is_private: false }));
+  await respond(other, "/api/graphql", profileReply({ username: "demo.creator" }));
+  await respond(other, "/api/graphql", profileReply({ username: "demo.creator", is_private: "false" }));
+  assert.equal(privacy(other), null);
+
+  // Off a Reels tab nothing is noted.
+  const grid = loadPage("https://www.instagram.com/demo.creator/");
+  await respond(grid, "/api/graphql", profileReply({ username: "demo.creator", is_private: false }));
+  assert.equal(privacy(grid), null);
+});
+
+test("privacy: the first answer stands, and noting it changes nothing that's collected", async () => {
+  const w = loadPage(REELS_TAB);
+  await respond(w, "/api/graphql", profileReply({ username: "demo.creator", is_private: false }));
+  await respond(w, "/api/graphql", profileReply({ username: "demo.creator", is_private: true }));
+  assert.deepEqual(privacy(w), { owner: "demo.creator", isPrivate: false });
+  await respond(w, "/api/graphql", reelsTab[0].text);
+  assert.equal(buffered(w).length, 4);
+  assert.equal(w.__IG_SORTER_RESPONSES__, 3);
+});
+
+test("privacy: an Instagram XHR the address filter skips can still answer it, and is not otherwise read", async () => {
+  const w = loadPage(REELS_TAB);
+  xhr(w, "/ajax/profile_moved_here", profileReply({ username: "demo.creator", is_private: false }));
+  assert.deepEqual(privacy(w), { owner: "demo.creator", isPrivate: false });
+  assert.equal(w.__IG_SORTER_RESPONSES__, 0, "still not counted as a response read");
+  xhr(w, "/ajax/reels_moved_here", reelsTab[0].text);
+  assert.equal(buffered(w).length, 0, "and nothing from it collected");
+
+  // Another host is never read, even for this.
+  const away = loadPage(REELS_TAB);
+  xhr(away, "https://www.example.com/x", profileReply({ username: "demo.creator", is_private: false }));
+  assert.equal(privacy(away), null);
+});

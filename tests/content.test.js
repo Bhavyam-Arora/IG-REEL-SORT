@@ -29,8 +29,9 @@ function loadContent(opts) {
           ["div", { id: "tabs" }],
           ["div", { id: "panel" },
             ["div", { id: "grid", style: "display: flex; flex-direction: column" },
-              ["div", { id: "row1" }, ...reelLinks(4)],
-              ["div", { id: "row2" }, ...reelLinks(4)]],
+              // opts.thumbs: the grid's link hrefs instead, all in the first row.
+              ["div", { id: "row1" }, ...(opts.thumbs ? opts.thumbs.map((href) => ["a", { href }]) : reelLinks(4))],
+              ["div", { id: "row2" }, ...(opts.thumbs ? [] : reelLinks(4))]],
             ["div", { id: "spinner" }]],
           ["div", { id: "below", style: "display: block" }]],
         ["footer", { id: "footer" }]]
@@ -129,6 +130,7 @@ function loadContent(opts) {
     addEventListener(type, fn) { if (type === "message") listeners.message.push(fn); },
     postMessage() {}
   };
+  Object.assign(w, opts.window); // extra page globals a test wants
   w.window = w;
   vm.createContext(w);
   vm.runInContext(SOURCE, w, { filename: "content.js" });
@@ -908,4 +910,189 @@ test("health log: the tab's console says whether each sort was saved", () => {
     broken.logged.join("\n")
   );
   assert.equal(broken.store.health, undefined);
+});
+
+// ---- Error report offer ----
+
+const REPORTABLE = ["no_responses", "responses_but_no_reels", "reels_but_none_from_profile", "reels_missing_metric"];
+// A failed sort on a public profile, as collector.js posts it.
+const failed = (code, extra) =>
+  Object.assign({
+    reason: "no_reels", total: 0, codes: [code], profilePrivate: false, responses: 14, scrolls: 11,
+    elapsedMs: 31234, rules: { source: "content", version: 2, warning: null }
+  }, extra);
+
+test("report offer: made for each of the four codes on a public profile, with counts and versions only", () => {
+  for (const code of REPORTABLE) {
+    const page = loadContent();
+    const withReels = code === "reels_missing_metric";
+    page.result(withReels ? posts : [], failed(code, withReels ? { reason: "end", total: 3 } : {}));
+    const offer = { ...page.store.sortState.report };
+    assert.equal(typeof offer.id, "string", code);
+    assert.equal(offer.id, page.store.sortState.loadId, "one offer per page load");
+    delete offer.id;
+    assert.deepEqual(offer, {
+      reason: code, rulesSource: "builtin", rulesVersion: 2, responsesSeen: 14,
+      postsFound: withReels ? 3 : 0, scrolls: 11, durationMs: 31234, arc: false
+    }, code);
+    assert.doesNotMatch(JSON.stringify(offer), /demo|instagram|R1/, "no profile, URL or reel");
+  }
+});
+
+test("report offer: remote rules say so; the built-in fallback is version 0", () => {
+  const remote = loadContent();
+  remote.result([], failed("no_responses", { rules: { source: "remote", version: 3 } }));
+  assert.equal(remote.store.sortState.report.rulesSource, "remote");
+  assert.equal(remote.store.sortState.report.rulesVersion, 3);
+  const fallback = loadContent();
+  fallback.result([], failed("no_responses", { rules: { source: "builtin", version: 0 } }));
+  assert.equal(fallback.store.sortState.report.rulesSource, "builtin");
+  assert.equal(fallback.store.sortState.report.rulesVersion, 0);
+  const none = loadContent();
+  none.result([], failed("no_responses", { rules: null }));
+  assert.equal(none.store.sortState.report.rulesVersion, 0);
+});
+
+// The profile's own reel thumbnails as Instagram links them, and others'.
+const THUMBS = ["/demo/reel/A1/", "/demo/reel/A2/", "/demo/reel/A3/"];
+const offered = (opts, extra) => {
+  const page = loadContent(opts);
+  page.result([], failed("responses_but_no_reels", extra));
+  assert.ok(page.store.sortState.warning, "the failure itself always shows");
+  return page.store.sortState.report;
+};
+
+test("report offer: is_private missing + the profile's thumbnails visible → offered", () => {
+  for (const profilePrivate of [null, undefined]) {
+    assert.ok(offered({ thumbs: THUMBS }, { profilePrivate }), String(profilePrivate));
+  }
+  // Absolute links, the /p/ and bare /reel/ forms, count too.
+  assert.ok(offered({ thumbs: ["https://www.instagram.com/demo/reel/B1/", "/demo/p/B2/", "/reel/B3/"] }, { profilePrivate: null }));
+});
+
+test("report offer: is_private missing + no thumbnails, too few, or not the profile's → not offered", () => {
+  const cases = {
+    none: [],
+    "two only": THUMBS.slice(0, 2),
+    "the same reel three times": ["/demo/reel/A1/", "/demo/reel/A1/", "/demo/reel/A1/"],
+    "another profile's": ["/other/reel/A1/", "/other/reel/A2/", "/other/reel/A3/"],
+    "not reels": ["/demo/", "/demo/tagged/", "/explore/"]
+  };
+  for (const [name, thumbs] of Object.entries(cases)) {
+    assert.equal(offered({ thumbs }, { profilePrivate: null }), null, name);
+  }
+});
+
+test("report offer: is_private true → not offered, with or without thumbnails", () => {
+  assert.equal(offered({ thumbs: [] }, { profilePrivate: true }), null);
+  assert.equal(offered({ thumbs: THUMBS }, { profilePrivate: true }), null);
+});
+
+test("report offer: is_private false is enough on its own; anything but a boolean counts as unknown", () => {
+  assert.ok(offered({ thumbs: [] }, { profilePrivate: false }));
+  for (const profilePrivate of ["false", 0]) {
+    assert.equal(offered({ thumbs: [] }, { profilePrivate }), null, String(profilePrivate));
+  }
+});
+
+test("report offer: an empty profile is never offered, thumbnails or not", () => {
+  for (const profilePrivate of [false, null]) {
+    const page = loadContent({ thumbs: THUMBS });
+    page.result([], failed("profile_has_no_reels", { profilePrivate }));
+    assert.equal(page.store.sortState.report, null, String(profilePrivate));
+  }
+});
+
+// ---- devForceFailure (testing the error report) ----
+
+test("devForceFailure: off by default, a sort is left as it came", () => {
+  const page = loadContent();
+  page.result(posts, { reason: "complete", codes: [], profilePrivate: false });
+  assert.equal(page.store.sortState.status, "done");
+  assert.deepEqual(page.store.sortState.codes, []);
+  assert.equal(page.store.sortState.report, null);
+  assert.ok(page.$("ig-sorter-wrap"));
+});
+
+test("devForceFailure: the next sort ends with the code, offers the report, and the switch clears after one use", () => {
+  const page = loadContent({ store: { devForceFailure: "reels_but_none_from_profile" } });
+  page.result(posts, { reason: "complete", codes: [], profilePrivate: false, responses: 9, scrolls: 4 });
+  const st = page.store.sortState;
+  assert.equal(st.status, "stopped");
+  assert.deepEqual([...st.codes], ["reels_but_none_from_profile"]);
+  assert.equal(st.warning, "Couldn't read reels — Instagram may have changed something.");
+  assert.equal(st.report.reason, "reels_but_none_from_profile");
+  assert.equal(st.report.responsesSeen, 9, "the normal collection's own counts");
+  assert.equal(page.$("ig-sorter-wrap"), null, "no sorted grid, as a real failure would have none");
+  assert.ok(!("devForceFailure" in page.store), "removed from storage");
+  assert.deepEqual([...page.store.health[0].codes], ["reels_but_none_from_profile"], "the health log records what was shown");
+
+  // The next result on the same page is left alone.
+  page.result(posts, { reason: "complete", codes: [], profilePrivate: false });
+  assert.deepEqual(page.store.sortState.codes, []);
+  assert.equal(page.store.sortState.report, null);
+});
+
+test("devForceFailure: a missing metric keeps the sorted grid and names the sort's metric", () => {
+  const page = loadContent({ store: { devForceFailure: "reels_missing_metric" } });
+  page.result(posts, { reason: "end", codes: [], sortBy: "likes", profilePrivate: false });
+  assert.equal(page.store.sortState.warning, "Instagram isn't sending likes right now.");
+  assert.equal(page.store.sortState.report.reason, "reels_missing_metric");
+  assert.ok(page.$("ig-sorter-wrap"));
+  assert.ok(!("devForceFailure" in page.store));
+});
+
+test("devForceFailure: any other value does nothing and stays; a run that never collected doesn't use it up", () => {
+  for (const value of ["wrong_page", "profile_has_no_reels", true, "NO_RESPONSES"]) {
+    const page = loadContent({ store: { devForceFailure: value } });
+    page.result(posts, { reason: "complete", codes: [], profilePrivate: false });
+    assert.deepEqual(page.store.sortState.codes, [], String(value));
+    assert.equal(page.store.devForceFailure, value);
+  }
+  const page = loadContent({ store: { devForceFailure: "no_responses" } });
+  page.result([], { reason: "wrong_page", codes: ["wrong_page"], total: 0 });
+  assert.deepEqual(page.store.sortState.codes, ["wrong_page"]);
+  assert.equal(page.store.devForceFailure, "no_responses", "still armed for the real sort");
+});
+
+test("report offer: never after success, a cancelled run, a plan limit, the wrong page or an empty profile", () => {
+  const cases = {
+    success: [posts, { reason: "complete", codes: [], profilePrivate: false }],
+    "Free cap reached": [posts, { reason: "complete", codes: [], plan: "free", profilePrivate: false }],
+    "left the Reels tab": [[], failed("no_responses", { reason: "navigated", codes: [] })],
+    "left mid-run with a code": [[], failed("no_responses", { reason: "navigated" })],
+    "wrong page": [[], failed("wrong_page", { reason: "wrong_page" })],
+    "empty profile": [[], failed("profile_has_no_reels")],
+    "time limit only": [posts, { reason: "timeout", codes: ["stopped_time_limit"], profilePrivate: false }]
+  };
+  for (const [name, [list, extra]] of Object.entries(cases)) {
+    const page = loadContent();
+    page.result(list, extra);
+    assert.equal(page.store.sortState.report, null, name);
+  }
+});
+
+test("report offer: a time-limited sort missing its metric is offered for the metric", () => {
+  const page = loadContent();
+  page.result(posts, failed("stopped_time_limit", {
+    reason: "timeout", total: 3, codes: ["stopped_time_limit", "reels_missing_metric"]
+  }));
+  assert.equal(page.store.sortState.report.reason, "reels_missing_metric");
+});
+
+test("report offer: Arc is recognised by its page theme, for the worker to name it", () => {
+  const style = (v) => () => ({ getPropertyValue: (k) => (k === "--arc-palette-title" ? v : "") });
+  const arc = loadContent({ window: { getComputedStyle: style("#1d1d1f") } });
+  arc.result([], failed("no_responses"));
+  assert.equal(arc.store.sortState.report.arc, true);
+  const chrome = loadContent({ window: { getComputedStyle: style("") } });
+  chrome.result([], failed("no_responses"));
+  assert.equal(chrome.store.sortState.report.arc, false);
+});
+
+test("report offer: the health log still keeps the profile name locally, and the offer never does", () => {
+  const page = loadContent();
+  page.result([], failed("no_responses"));
+  assert.equal(page.store.health[0].profile, "demo");
+  assert.ok(!("profile" in page.store.sortState.report));
 });

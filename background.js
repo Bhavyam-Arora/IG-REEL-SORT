@@ -554,6 +554,158 @@ chrome.tabs.onRemoved.addListener(function (tabId) {
   dropSortState(tabId, null).catch(function () {});
 });
 
+// ---- Error reports ----
+// After a sort that failed in a way that may mean Instagram changed
+// something, the popup asks whether to send an anonymous error report.
+// content.js decides when it may ask (the sort state's `report`); this side
+// builds the report, keeps the daily limits, and sends it, only when the user
+// clicks Send report. Nothing here is ever sent on its own.
+//
+// The report is exactly the 10 fields POST /v1/reports accepts and nothing
+// else: no profile, URL, reel, user id, email or token. It goes without the
+// sign-in (no Authorization header) and without cookies, signed in or not. A
+// failed or slow send is dropped quietly, never retried.
+//
+// Limits, per local day, in chrome.storage.local.reportLimits: one report per
+// reason and three in all. At a limit the question isn't asked at all. Each
+// offer is answered once (sent or declined, reportAnswered), so reopening the
+// popup doesn't ask again.
+var REPORT_URL = API_BASE + "/v1/reports";
+var REPORT_TIMEOUT_MS = 8000;
+// The backend's REPORT_REASONS: the codes worth a report. Others are never sent.
+var REPORT_REASONS = ["no_responses", "responses_but_no_reels", "reels_but_none_from_profile", "reels_missing_metric"];
+var REPORT_PER_REASON_PER_DAY = 1;
+var REPORT_PER_DAY = 3;
+var REPORT_ANSWERED_MAX = 20;
+// The backend's ranges for each count (REPORT_FIELDS); values past them are capped.
+var REPORT_MAX = {
+  rulesVersion: 1000000000, browserMajor: 1000, responsesSeen: 10000, postsFound: 10000,
+  scrolls: 1000, durationMs: 600000
+};
+
+function boundedInt(v, max) {
+  var n = Math.round(Number(v));
+  return isFinite(n) ? Math.min(max, Math.max(0, n)) : 0;
+}
+
+// Which browser this is, as the backend names them, and its major version.
+// Edge and Brave name themselves in the user-agent brands (Brave also has
+// navigator.brave); Arc doesn't, so content.js looks for its page theme
+// (arcHint). Plain Chrome names itself "Google Chrome". Anything else, or no
+// brands at all, is "other".
+function browserInfo(arcHint) {
+  var nav = self.navigator || {};
+  var brands = (nav.userAgentData && Array.isArray(nav.userAgentData.brands)) ? nav.userAgentData.brands : [];
+  var ua = String(nav.userAgent || "");
+  var brand = function (name) {
+    var b = brands.find(function (x) { return x && x.brand === name; });
+    return b ? b.version : null;
+  };
+  var uaMajor = function (re) {
+    var m = ua.match(re);
+    return m ? m[1] : null;
+  };
+  var chromium = brand("Chromium") || uaMajor(/Chrome\/(\d+)/);
+  var name = "other";
+  var major = chromium;
+  if (brand("Microsoft Edge") || /\bEdg\//.test(ua)) {
+    name = "edge";
+    major = brand("Microsoft Edge") || uaMajor(/\bEdg\/(\d+)/) || chromium;
+  } else if (brand("Brave") || nav.brave) {
+    name = "brave";
+    major = brand("Brave") || chromium;
+  } else if (arcHint === true) {
+    name = "arc";
+  } else if (brand("Google Chrome")) {
+    name = "chrome";
+    major = brand("Google Chrome");
+  }
+  return { browser: name, browserMajor: boundedInt(parseInt(major, 10), REPORT_MAX.browserMajor) };
+}
+
+// The report for an offer from the sort state, field for field what is sent,
+// or null when the offer isn't one a report may be sent for.
+function reportBody(offer) {
+  if (!offer || typeof offer !== "object" || REPORT_REASONS.indexOf(offer.reason) === -1) return null;
+  var version = chrome.runtime.getManifest().version;
+  if (!/^\d{1,5}(\.\d{1,5}){0,3}$/.test(version)) return null;
+  var b = browserInfo(offer.arc);
+  return {
+    reason: offer.reason,
+    extensionVersion: version,
+    rulesVersion: boundedInt(offer.rulesVersion, REPORT_MAX.rulesVersion),
+    rulesSource: offer.rulesSource === "remote" ? "remote" : "builtin",
+    browser: b.browser,
+    browserMajor: b.browserMajor,
+    responsesSeen: boundedInt(offer.responsesSeen, REPORT_MAX.responsesSeen),
+    postsFound: boundedInt(offer.postsFound, REPORT_MAX.postsFound),
+    scrolls: boundedInt(offer.scrolls, REPORT_MAX.scrolls),
+    durationMs: boundedInt(offer.durationMs, REPORT_MAX.durationMs)
+  };
+}
+
+// Today's counts; a new day starts from nothing.
+async function reportLimits() {
+  var o = await chrome.storage.local.get({ reportLimits: null, reportAnswered: [] });
+  var l = o.reportLimits;
+  var today = localDate();
+  if (!l || l.day !== today || typeof l.reasons !== "object" || !l.reasons) l = { day: today, total: 0, reasons: {} };
+  return { limits: l, answered: Array.isArray(o.reportAnswered) ? o.reportAnswered : [] };
+}
+
+async function reportAllowed(body, id) {
+  if (!body) return false;
+  var s = await reportLimits();
+  if (id && s.answered.indexOf(id) !== -1) return false;
+  return (s.limits.total || 0) < REPORT_PER_DAY && (s.limits.reasons[body.reason] || 0) < REPORT_PER_REASON_PER_DAY;
+}
+
+async function markAnswered(id, sentReason) {
+  var s = await reportLimits();
+  var set = {};
+  if (id) set.reportAnswered = [id].concat(s.answered.filter(function (x) { return x !== id; })).slice(0, REPORT_ANSWERED_MAX);
+  if (sentReason) {
+    s.limits.total = (s.limits.total || 0) + 1;
+    s.limits.reasons[sentReason] = (s.limits.reasons[sentReason] || 0) + 1;
+    set.reportLimits = s.limits;
+  }
+  await chrome.storage.local.set(set);
+}
+
+// What the popup shows before asking: whether it may ask, and the report.
+async function previewReport(offer) {
+  var body = reportBody(offer);
+  var allowed = await reportAllowed(body, offer && offer.id);
+  return { allowed: allowed, report: allowed ? body : null };
+}
+
+// The user clicked Send report. Counted against the limits before sending,
+// whatever comes of it. Resolves to whether a send was attempted; a failure is
+// only logged here, and the popup thanks the user either way.
+async function sendReport(offer) {
+  var body = reportBody(offer);
+  if (!(await reportAllowed(body, offer && offer.id))) return false;
+  await markAnswered(offer.id, body.reason);
+  var ctl = new AbortController();
+  var timer = setTimeout(function () { ctl.abort(); }, REPORT_TIMEOUT_MS);
+  try {
+    var res = await fetch(REPORT_URL, {
+      method: "POST",
+      credentials: "omit",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: ctl.signal
+    });
+    if (res.status !== 202) console.log("[GridSorter] error report: not accepted (HTTP " + res.status + ")");
+  } catch (e) {
+    console.log("[GridSorter] error report: not sent (" + (e && e.message ? e.message : e) + ")");
+  } finally {
+    clearTimeout(timer);
+  }
+  return true;
+}
+
 // ---- Export to Google Sheets ----
 // The CSV export's text, uploaded to the user's Drive with the instruction to
 // convert it into a Google Sheet: one multipart request, no Sheets API, and
@@ -778,5 +930,19 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     return reply(exportToSheets(msg.tabId), sendResponse, function (url) { return { ok: true, url: url }; });
   }
   if (msg.type === "signOut") return reply(signOut().then(account), sendResponse, asAccount);
+  // Error reports: from the popup only, never a tab, so no page can send one.
+  // sendReport is the user's click on Send report.
+  if (msg.type === "reportPreview" || msg.type === "sendReport" || msg.type === "declineReport") {
+    if (sender && sender.tab) return false;
+    if (msg.type === "reportPreview") {
+      return reply(previewReport(msg.offer), sendResponse, function (p) {
+        return { ok: true, allowed: p.allowed, report: p.report };
+      });
+    }
+    if (msg.type === "sendReport") {
+      return reply(sendReport(msg.offer), sendResponse, function (sent) { return { ok: true, sent: sent }; });
+    }
+    return reply(markAnswered(msg.offer && msg.offer.id, null), sendResponse, function () { return { ok: true }; });
+  }
   return false;
 });

@@ -47,6 +47,7 @@ function loadPopup(opts) {
   const toTab = [];
   const toWorker = [];
   const changed = [];
+  const pendingSends = [];
   const plan = () => ({
     plan: opts.pro ? "pro_monthly" : "none", pro: !!opts.pro, freeMaxReels: 50
   });
@@ -66,6 +67,12 @@ function loadPopup(opts) {
         if (["account", "signIn", "signOut"].includes(msg.type)) cb({ ok: true, account: account() });
         // The export's outcome comes through session storage, not this answer.
         if (msg.type === "sheetsExport") cb({ ok: true });
+        // Error reports: opts.reportPreview answers the preview (none: the
+        // worker is silent). A send is answered only when the test says, with
+        // p.answerSend().
+        if (msg.type === "reportPreview" && opts.reportPreview) cb(opts.reportPreview(msg));
+        if (msg.type === "sendReport") pendingSends.push(cb);
+        if (msg.type === "declineReport") cb({ ok: true });
       }
     },
     tabs: {
@@ -118,6 +125,8 @@ function loadPopup(opts) {
       for (const fn of changed) fn({ sheetsExport: { newValue: s } }, "session");
     },
     status: () => ($("status").hidden ? null : $("status").textContent),
+    answerSend: (reply) => pendingSends.splice(0).forEach((cb) => cb(reply)),
+    click: (id) => $(id).dispatchEvent({ type: "click" }),
     text: () => document.body.textContent
   };
 }
@@ -455,4 +464,117 @@ test("Pro usage line: counts with thousands separators", () => {
   });
   assert.equal(p.$("usage").hidden, false);
   assert.match(p.$("usage").textContent, /^1,250 of 3,000 transcripts used · resets /);
+});
+
+// ---- Error report ----
+
+const OFFER = {
+  id: "L1", reason: "reels_but_none_from_profile", rulesSource: "builtin", rulesVersion: 2,
+  responsesSeen: 14, postsFound: 0, scrolls: 11, durationMs: 31234, arc: false
+};
+const REPORT = {
+  reason: "reels_but_none_from_profile", extensionVersion: "0.2.0", rulesVersion: 2, rulesSource: "builtin",
+  browser: "chrome", browserMajor: 141, responsesSeen: 14, postsFound: 0, scrolls: 11, durationMs: 31234
+};
+const FAILED = here({
+  status: "stopped", count: 0, codes: ["reels_but_none_from_profile"],
+  warning: "Couldn't read reels — Instagram may have changed something.", report: OFFER
+});
+const allow = () => ({ ok: true, allowed: true, report: REPORT });
+const reportSends = (p) => p.toWorker.filter((m) => m.type === "sendReport");
+
+test("report: a failed sort the worker allows asks, joined to the failure card, and sends nothing yet", () => {
+  const p = loadPopup({ store: { sortState: FAILED }, reportPreview: allow });
+  assert.equal(p.status(), FAILED.warning, "the failure itself still shows");
+  assert.equal(p.$("report").hidden, false);
+  assert.ok(p.$("status").classList.contains("has-report"));
+  const text = p.$("report").textContent.replace(/\s+/g, " ");
+  assert.match(text, /Sort didn't work — Instagram may have changed something\./);
+  assert.match(text, /Send an anonymous error report\? It only includes the error type, version numbers and browser — no profile names or data\./);
+  assert.equal(p.$("reportSend").textContent.trim(), "Send report");
+  assert.equal(p.$("reportNo").textContent.trim(), "No thanks");
+  assert.equal(p.$("reportThanks").hidden, true);
+  assert.doesNotMatch(text, /always/i, "no always-send option");
+  const preview = p.toWorker.find((m) => m.type === "reportPreview");
+  assert.deepEqual(preview.offer, OFFER);
+  assert.equal(reportSends(p).length, 0, "nothing sent without the click");
+});
+
+test("report: What's sent? shows the exact report as text, before anything is sent", () => {
+  const p = loadPopup({ store: { sortState: FAILED }, reportPreview: allow });
+  assert.equal(p.$("reportBody").hidden, true);
+  p.click("reportWhat");
+  assert.equal(p.$("reportBody").hidden, false);
+  assert.equal(p.$("reportWhat").getAttribute("aria-expanded"), "true");
+  assert.deepEqual(JSON.parse(p.$("reportBody").textContent), REPORT);
+  assert.equal(reportSends(p).length, 0);
+  p.click("reportWhat");
+  assert.equal(p.$("reportBody").hidden, true);
+});
+
+test("report: Send report sends once through the worker, then thanks the user", () => {
+  const p = loadPopup({ store: { sortState: FAILED }, reportPreview: allow });
+  p.click("reportSend");
+  assert.equal(reportSends(p).length, 1);
+  assert.deepEqual(reportSends(p)[0].offer, OFFER);
+  assert.equal(p.$("reportSend").disabled, true, "no second click while it sends");
+  assert.equal(p.$("reportNo").disabled, true);
+  p.answerSend({ ok: true, sent: true });
+  assert.equal(p.$("reportAsk").hidden, true);
+  assert.equal(p.$("reportThanks").hidden, false);
+  assert.equal(p.$("reportThanks").textContent.trim(), "Thanks — report sent.");
+});
+
+test("report: a send that fails, or a worker that answers nothing useful, still thanks quietly", () => {
+  for (const reply of [{ ok: false, error: "x" }, undefined]) {
+    const p = loadPopup({ store: { sortState: FAILED }, reportPreview: allow });
+    p.click("reportSend");
+    p.answerSend(reply);
+    assert.equal(p.$("reportThanks").hidden, false);
+    assert.doesNotMatch(p.text(), /couldn't send|not sent|failed/i);
+    assert.equal(p.status(), FAILED.warning, "the card says nothing more");
+  }
+});
+
+test("report: No thanks hides it, tells the worker, and sends nothing", () => {
+  const p = loadPopup({ store: { sortState: FAILED }, reportPreview: allow });
+  p.click("reportNo");
+  assert.equal(p.$("report").hidden, true);
+  assert.ok(!p.$("status").classList.contains("has-report"));
+  assert.deepEqual(p.toWorker.filter((m) => m.type === "declineReport").map((m) => m.offer.id), ["L1"]);
+  assert.equal(reportSends(p).length, 0);
+  assert.equal(p.status(), FAILED.warning);
+});
+
+test("report: not asked when the worker says no (a daily limit, or already answered) or doesn't answer", () => {
+  for (const reportPreview of [() => ({ ok: true, allowed: false, report: null }), () => undefined, null]) {
+    const p = loadPopup({ store: { sortState: FAILED }, reportPreview });
+    assert.equal(p.$("report").hidden, true);
+    assert.equal(p.status(), FAILED.warning);
+  }
+});
+
+test("report: never asked without an offer, while running, off this page or off a Reels tab", () => {
+  const states = {
+    "no offer": here({ status: "stopped", warning: "This profile hasn't posted any reels.", report: null }),
+    success: here({ status: "done", count: 13, warning: null }),
+    running: here({ status: "running", message: "Collecting reels…", report: OFFER }),
+    "another tab": Object.assign({}, FAILED, { tabId: 9 }),
+    "another profile": Object.assign({}, FAILED, { profile: "other.studio" })
+  };
+  for (const [name, sortState] of Object.entries(states)) {
+    const p = loadPopup({ store: { sortState }, reportPreview: allow });
+    assert.equal(p.$("report").hidden, true, name);
+    assert.ok(!p.toWorker.some((m) => m.type === "reportPreview"), name + ": not even previewed");
+  }
+  const grid = loadPopup({ url: "https://www.instagram.com/demo.creator/", store: { sortState: FAILED }, reportPreview: allow });
+  assert.equal(grid.$("report").hidden, true, "profile grid, not the Reels tab");
+});
+
+test("report: a new sort starting takes the question away", () => {
+  const p = loadPopup({ store: { sortState: FAILED }, reportPreview: allow });
+  assert.equal(p.$("report").hidden, false);
+  p.setPing({ loadId: "L2" });
+  p.state(here({ loadId: "L2", status: "running", message: "Collecting reels…" }));
+  assert.equal(p.$("report").hidden, true);
 });

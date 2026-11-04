@@ -141,6 +141,37 @@ button { font-family: var(--sans); cursor: pointer; }
 .status.good { color: var(--signal); border-color: rgba(232,163,61,.42); }
 .status.bad  { color: #F08A7A; border-color: rgba(240,138,122,.42); }
 
+/* ---- error report: the lower half of the failure card ---- */
+.status.has-report {
+  margin-bottom: 0;
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+}
+.report {
+  margin-top: 0;
+  border-top: 1px dashed rgba(240,138,122,.28);
+  border-radius: 0 0 8px 8px;
+}
+.report[hidden], .report [hidden] { display: none; }
+.report p { margin: 0 0 7px; }
+.report-title { color: #F08A7A; }
+.report p:not(.report-title), .report-body { color: var(--muted); }
+.report-actions { display: flex; gap: 7px; }
+.report .link { margin-top: 6px; padding: 2px; text-align: left; }
+.report-body {
+  margin: 6px 0 0;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--ink);
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.report-thanks { color: var(--signal); margin: 0; }
+
 /* Three across in a 296px panel, tighter sides so "Export Excel" fits, and
    Google Sheets on its own row: its label can't fit a third or half of it. */
 .exports { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }

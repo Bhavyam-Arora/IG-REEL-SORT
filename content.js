@@ -46,6 +46,11 @@
   // storage, so it's told. Captured bodies stay in the tab and are only ever
   // saved to a local file on request.
   var devCapture = false;
+  // Forced failure, for testing the error report: off unless
+  // chrome.storage.local.devForceFailure is set by hand (see README) to one of
+  // REPORT_REASONS. The next sort's result then ends with that code, after its
+  // normal collection, and the key is removed: one use.
+  var forcedFailure = null;
 
   function tellPageDevCapture() {
     window.postMessage({ source: "ig-sorter-debug", type: "devCapture", on: devCapture }, "*");
@@ -78,11 +83,12 @@
   }
 
   try {
-    chrome.storage.local.get({ devCapture: false, rules: null }, function (o) {
+    chrome.storage.local.get({ devCapture: false, rules: null, devForceFailure: null }, function (o) {
       o = o || {};
       if (isRules(o.rules)) injectAll(o.rules);
       else askForRules();
       devCapture = o.devCapture === true;
+      forcedFailure = o.devForceFailure;
       tellPageDevCapture();
     });
     chrome.storage.onChanged.addListener(function (changes, area) {
@@ -1287,10 +1293,104 @@
     return null;
   }
 
+  // ---- Error report offer ----
+  // A failed sort that may mean Instagram changed something can offer the
+  // user an anonymous error report; the popup asks, and only the worker sends,
+  // and only on the user's click. Offered only for these codes (never an empty
+  // profile), never after a run that left the Reels tab, and only when the user
+  // can see this profile's reels: Instagram said it is public, or (in a break
+  // that took is_private with it) it said nothing and the page itself shows at
+  // least REPORT_MIN_THUMBS of the profile's reel thumbnails. A profile
+  // Instagram said is private is never offered. These are the facts the worker builds the
+  // report from: the reason code, counts, the rules it ran on and a browser
+  // hint. No profile name, URL or reel goes in.
+  var REPORT_REASONS = ["no_responses", "responses_but_no_reels", "reels_but_none_from_profile", "reels_missing_metric"];
+  var REPORT_MIN_THUMBS = 3;
+
+  // Instagram's own thumbnails of this profile's reels and posts in its grid
+  // (/<profile>/reel/<code>/, /reel/<code>/ or the /p/ forms). Counted before
+  // the sorted grid goes in, so ours are never counted.
+  function profileThumbs() {
+    var grid = findGridContainer();
+    if (!grid) return 0;
+    var owner = RUN_PROFILE || ownerHere();
+    var seen = {};
+    var n = 0;
+    grid.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]').forEach(function (a) {
+      var href = String(a.getAttribute("href") || "").replace(/^https?:\/\/[^/]+/i, "");
+      var m = href.match(/^\/(?:([^/?#]+)\/)?(?:reel|p)\/([^/?#]+)/);
+      if (!m || (m[1] && m[1].toLowerCase() !== owner) || seen[m[2]]) return;
+      seen[m[2]] = true;
+      n++;
+    });
+    return n;
+  }
+
+  // Arc puts its theme colours on every page it shows as --arc-palette-*
+  // custom properties; Chrome has none. Its user agent is plain Chrome's.
+  function looksLikeArc() {
+    try {
+      return !!getComputedStyle(document.documentElement).getPropertyValue("--arc-palette-title").trim();
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function reportOffer(d, codes, thumbs) {
+    if (d.reason === "navigated") return null;
+    var visible =
+      d.profilePrivate === false ||
+      ((d.profilePrivate === null || d.profilePrivate === undefined) && thumbs >= REPORT_MIN_THUMBS);
+    if (!visible) return null;
+    var reason = null;
+    for (var i = 0; i < codes.length && !reason; i++) {
+      if (REPORT_REASONS.indexOf(codes[i]) !== -1) reason = codes[i];
+    }
+    if (!reason) return null;
+    var rules = d.rules || {};
+    return {
+      id: LOAD_ID,
+      reason: reason,
+      rulesSource: rules.source === "remote" ? "remote" : "builtin",
+      rulesVersion: typeof rules.version === "number" ? rules.version : 0,
+      responsesSeen: d.responses || 0,
+      postsFound: d.total || 0,
+      scrolls: d.scrolls || 0,
+      durationMs: d.elapsedMs || 0,
+      arc: looksLikeArc()
+    };
+  }
+
+  // The result as if it had failed with forcedFailure, once, then the switch
+  // is removed. Only a sort that collected normally: not one that left the
+  // Reels tab or never started. The three empty-handed codes drop the reels,
+  // as a real one would have none; a missing metric keeps them.
+  function forceFailure(d) {
+    var code = forcedFailure;
+    if (REPORT_REASONS.indexOf(code) === -1 || d.reason === "navigated" || d.reason === "wrong_page") return d;
+    forcedFailure = null;
+    try {
+      chrome.storage.local.remove("devForceFailure");
+    } catch (e) {}
+    console.warn("[GridSorter] devForceFailure: this sort ends with " + code + " (switch now off)");
+    var out = {};
+    for (var k in d) out[k] = d[k];
+    out.codes = [code];
+    if (code === "reels_missing_metric") {
+      out.missingMetric = OUTLIER_FIELD[d.sortBy] || (METRIC_WORD[d.sortBy] ? d.sortBy : "views");
+      out.alternatives = [];
+    } else {
+      out.posts = [];
+      out.ranked = 0;
+    }
+    return out;
+  }
+
   // A finished run says nothing in the popup unless something on this page
   // went wrong: the sorted grid itself is the result. Every failed or partial
   // run carries its reason codes, and the words for each.
-  function resultState(d, rendered) {
+  // thumbs: profileThumbs() as the result arrived, before any render.
+  function resultState(d, rendered, thumbs) {
     var n = (d.posts || []).length;
     var codes = Array.isArray(d.codes) ? d.codes : [];
     var state = {
@@ -1315,7 +1415,9 @@
         foreign: (d.stats && d.stats.foreign) || 0,
         unreadable: d.unreadable || 0,
         hasNextPage: d.hasNextPage === undefined ? null : d.hasNextPage
-      }
+      },
+      // Set when the popup may offer an error report (see reportOffer).
+      report: reportOffer(d, codes, thumbs || 0)
     };
 
     var warnings = codes.map(function (c) {
@@ -1374,8 +1476,11 @@
   // The health log: one entry per sort, newest first, the last LOG_MAX kept
   // (chrome.storage.local.health). What was asked, what came back, what was
   // left out and why, and what stopped it. Counts and the profile name only:
-  // no reels, captions, links or tokens. Local; never sent anywhere. The
-  // worker's sortLog() prints it.
+  // no reels, captions, links or tokens. It stays on this machine and is never
+  // sent anywhere. The only thing that ever leaves is the opt-in error report
+  // (background.js, sent only on the user's click): its 10 fields, a few of
+  // them the same counts, never the profile name or this log. The worker's
+  // sortLog() prints it.
   var LOG_MAX = 50;
 
   function logSort(d) {
@@ -1461,6 +1566,7 @@
     }
 
     if (d.type === "result") {
+      d = forceFailure(d);
       logSort(d);
       // Run off to another profile: nothing of it belongs on this page.
       if (leftProfile()) {
@@ -1468,6 +1574,7 @@
         return;
       }
       LAST = d.posts || [];
+      var thumbs = profileThumbs();
       // After navigating away the "grid" on screen belongs to some other page.
       var ok =
         LAST.length && d.reason !== "navigated"
@@ -1476,7 +1583,7 @@
       try {
         chrome.storage.local.set({ lastRun: { count: LAST.length, sortBy: d.sortBy, ts: Date.now() } });
       } catch (e) {}
-      saveSortState(resultState(d, ok));
+      saveSortState(resultState(d, ok, thumbs));
     }
   });
 

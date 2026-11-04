@@ -29,6 +29,11 @@
     reels: 0, foreign: 0, duplicates: 0, emptyReelsLists: 0, tooLarge: 0, unparsable: 0
   };
   var stats = window.__IG_SORTER_STATS__;
+  // Whether the Reels tab's profile is private, as Instagram's own responses
+  // say it: { owner, isPrivate }, or null until one does. Nothing else about
+  // the profile is kept. It only decides whether a failed sort may offer an
+  // anonymous error report (content.js), never what is collected.
+  window.__IG_SORTER_PROFILE_PRIVATE__ = null;
 
   function rules() {
     return window.__IG_SORTER_RULES__ || null;
@@ -154,6 +159,58 @@
     handleValues(values);
   }
 
+  // ---- Is the profile private? ----
+  // Instagram's profile response (data.user on a Reels tab load) and each of
+  // the profile's reels (media.user) carry the account as an object with its
+  // username and is_private. The first such object for the Reels tab's owner
+  // answers; nothing else is read. Searched by shape, at any depth, within a
+  // budget. These two names are deliberately not in lib/rules.js: they never
+  // touch sorting, and the rules must match the server's schema key for key.
+  // If Instagram renames them the answer stays unknown, and unknown never
+  // offers a report.
+  var PRIVACY_MAX_NODES = 50000;
+  var PRIVACY_MAX_DEPTH = 12;
+
+  function notePrivacy(values) {
+    var lib = window.__IG_SORTER_REELS__;
+    var target = lib ? lib.reelsTabOwner(location.href) : null;
+    var known = window.__IG_SORTER_PROFILE_PRIVATE__;
+    if (!target || (known && known.owner === target)) return;
+    var stack = values.map(function (v) { return [v, 0]; });
+    for (var n = 0; stack.length && n < PRIVACY_MAX_NODES; n++) {
+      var top = stack.pop();
+      var o = top[0];
+      if (!o || typeof o !== "object") continue;
+      if (
+        typeof o.is_private === "boolean" &&
+        typeof o.username === "string" &&
+        o.username.toLowerCase() === target
+      ) {
+        window.__IG_SORTER_PROFILE_PRIVATE__ = { owner: target, isPrivate: o.is_private };
+        return;
+      }
+      if (top[1] >= PRIVACY_MAX_DEPTH) continue;
+      for (var k in o) {
+        if (o[k] && typeof o[k] === "object") stack.push([o[k], top[1] + 1]);
+      }
+    }
+  }
+
+  // An Instagram XHR the address filter passed over: read for the privacy
+  // answer only, while there is none, and only when it could hold one. This
+  // is what can still answer when the filter itself no longer matches
+  // anything (a no_responses sort).
+  function notePrivacyText(text) {
+    var r = rules();
+    var lib = window.__IG_SORTER_REELS__;
+    var target = lib ? lib.reelsTabOwner(location.href) : null;
+    var known = window.__IG_SORTER_PROFILE_PRIVATE__;
+    if (!r || !target || (known && known.owner === target)) return;
+    if (typeof text !== "string" || text.length > r.responses.maxBodyChars) return;
+    if (text.indexOf('"is_private"') === -1) return;
+    notePrivacy(jsonValues(text));
+  }
+
   function handleValues(values) {
     var lib = window.__IG_SORTER_REELS__;
     if (typeof window.__IG_SORTER_EXTRACT__ !== "function" || !lib) return;
@@ -163,6 +220,10 @@
     // Off a profile's Reels tab nothing is collected at all.
     var target = lib.reelsTabOwner(location.href);
     if (!target) return;
+
+    try {
+      notePrivacy(values);
+    } catch (e) {}
 
     try {
       var found = window.__IG_SORTER_EXTRACT__(values.length === 1 ? values[0] : values);
@@ -352,7 +413,12 @@
         }
       } catch (e) {}
       try {
-        if (!shouldInspect(this.__igSorterUrl)) return;
+        if (!shouldInspect(this.__igSorterUrl)) {
+          if (this.__igSorterUrl && onInstagram(parseUrl(this.__igSorterUrl)) && (this.responseType === "" || this.responseType === "text")) {
+            notePrivacyText(this.responseText);
+          }
+          return;
+        }
         if (this.responseType === "" || this.responseType === "text") handleBody(this.responseText);
         else if (this.responseType === "json" && this.response && typeof this.response === "object") {
           handleValues([this.response]);

@@ -280,3 +280,38 @@ test("the result says the depth and plan it was asked on, and posts no separate 
   assert.equal(r.plan, "free");
   assert.equal(w.messages.filter((m) => m.type === "healthAlert").length, 0);
 });
+
+// ---- What an error report would be built from ----
+
+test("the result carries its scroll count and whether Instagram said the profile is private", async () => {
+  const pub = await run({ sortBy: "views", limit: 100 }, (w) => {
+    w.__IG_SORTER_RESPONSES__++;
+  }, (w) => {
+    w.__IG_SORTER_PROFILE_PRIVATE__ = { owner: "demo.creator", isPrivate: false };
+  });
+  assert.deepEqual(codes(pub.r), ["responses_but_no_reels"]);
+  assert.equal(pub.r.scrolls, pub.w.scrolls);
+  assert.ok(pub.r.scrolls > 0);
+  assert.equal(pub.r.profilePrivate, false);
+
+  const priv = await run({ sortBy: "views", limit: 100 }, null, (w) => {
+    w.__IG_SORTER_PROFILE_PRIVATE__ = { owner: "demo.creator", isPrivate: true };
+  });
+  assert.equal(priv.r.profilePrivate, true);
+
+  // Never said, or said about another profile: unknown.
+  const unknown = await run({ sortBy: "views", limit: 100 });
+  assert.equal(unknown.r.profilePrivate, null);
+  const elsewhere = await run({ sortBy: "views", limit: 100 }, null, (w) => {
+    w.__IG_SORTER_PROFILE_PRIVATE__ = { owner: "other.studio", isPrivate: false };
+  });
+  assert.equal(elsewhere.r.profilePrivate, null);
+});
+
+test("off a Reels tab the result says nothing about privacy and no scrolls", async () => {
+  const w = loadPage("https://www.instagram.com/demo.creator/", { job: { sortBy: "views", limit: 25 } });
+  const r = await result(w);
+  assert.equal(r.reason, "wrong_page");
+  assert.equal(r.scrolls, 0);
+  assert.equal(r.profilePrivate, null);
+});

@@ -224,7 +224,8 @@
       post("result", {
         posts: [], ranked: 0, median: null, sortBy: job.sortBy, target: reported,
         total: 0, hits: 0, unreadable: 0, reason: "wrong_page", codes: ["wrong_page"],
-        missingMetric: null, alternatives: [], rules: rulesInfo, limitMs: limitMs, elapsedMs: 0
+        missingMetric: null, alternatives: [], rules: rulesInfo, limitMs: limitMs, elapsedMs: 0,
+        scrolls: 0, profilePrivate: null
       });
       return;
     }
@@ -232,6 +233,7 @@
     var last = 0;
     var stagnant = 0;
     var emptyScrolls = 0;
+    var scrolls = 0; // for an error report's counts
     var responsesSeen = window.__IG_SORTER_RESPONSES__ || 0;
 
     for (;;) {
@@ -288,6 +290,7 @@
       });
 
       window.scrollTo(0, document.body.scrollHeight);
+      scrolls++;
 
       // Human-ish pacing. Do not lower below 600ms — aggressive scrolling is
       // what triggers rate limiting.
@@ -299,6 +302,10 @@
     var why = diagnose(reason, all, job.sortBy);
 
     if (reason !== "navigated") window.scrollTo(0, 0);
+
+    // true / false as Instagram said for this profile, or null when it never
+    // did (interceptor.js). Only a false lets content.js offer an error report.
+    var priv = window.__IG_SORTER_PROFILE_PRIVATE__;
 
     post("result", {
       posts: result.posts,
@@ -322,7 +329,9 @@
       hasNextPage: window.__IG_SORTER_PAGEINFO__.hasNextPage,
       rules: rulesInfo,
       limitMs: limitMs,
-      elapsedMs: Date.now() - started
+      elapsedMs: Date.now() - started,
+      scrolls: scrolls,
+      profilePrivate: priv && priv.owner === owner ? priv.isPrivate : null
     });
     clearJob();
   }

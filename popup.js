@@ -151,13 +151,83 @@ function showSortState(s) {
   if (!onThisPage(s)) {
     setStatus("");
     working(false);
+    showReport(null);
     return;
   }
   var running = s.status === "running" && Date.now() - (s.updatedAt || 0) <= STALE_MS;
   working(running);
   if (running) setStatus(s.message);
   else setStatus(s.warning || "", "bad");
+  showReport(running ? null : s);
 }
+
+// ---- Error report ----
+// Under a failed sort, joined to its card: content.js says when one may be
+// offered (s.report: the right failure, reels the user can see, this Reels
+// tab), and
+// the worker says whether today's limits allow it and what the report is.
+// Nothing is sent unless Send report is clicked; the worker does the sending.
+// "What's sent?" shows the report as the worker will send it.
+var offer = null; // the offer this popup is showing, or decided not to
+
+function reportShown(on) {
+  $("report").hidden = !on;
+  $("status").classList.toggle("has-report", on);
+}
+
+function showReport(s) {
+  var o = s && s.report && typeof s.report.id === "string" ? s.report : null;
+  if (!o) {
+    offer = null;
+    reportShown(false);
+    return;
+  }
+  if (offer && offer.id === o.id) return; // already asked, answered or turned down
+  offer = o;
+  reportShown(false);
+  chrome.runtime.sendMessage({ type: "reportPreview", offer: o }, function (res) {
+    var failed = chrome.runtime.lastError || !res || !res.ok || !res.allowed || !res.report;
+    if (offer !== o || failed) return;
+    $("reportBody").textContent = JSON.stringify(res.report, null, 2);
+    $("reportBody").hidden = true;
+    $("reportWhat").setAttribute("aria-expanded", "false");
+    $("reportAsk").hidden = false;
+    $("reportThanks").hidden = true;
+    $("reportSend").disabled = false;
+    $("reportSend").textContent = "Send report";
+    $("reportNo").disabled = false;
+    reportShown(true);
+  });
+}
+
+$("reportWhat").addEventListener("click", function () {
+  var open = $("reportBody").hidden;
+  $("reportBody").hidden = !open;
+  $("reportWhat").setAttribute("aria-expanded", String(open));
+});
+
+// A failed send is the worker's to log; the user is thanked either way.
+$("reportSend").addEventListener("click", function () {
+  var o = offer;
+  if (!o) return;
+  $("reportSend").disabled = true;
+  $("reportSend").textContent = "Sending…";
+  $("reportNo").disabled = true;
+  chrome.runtime.sendMessage({ type: "sendReport", offer: o }, function () {
+    void chrome.runtime.lastError; // read, so Chrome doesn't log it
+    if (offer !== o) return;
+    $("reportAsk").hidden = true;
+    $("reportThanks").hidden = false;
+  });
+});
+
+$("reportNo").addEventListener("click", function () {
+  if (!offer) return;
+  chrome.runtime.sendMessage({ type: "declineReport", offer: offer }, function () {
+    void chrome.runtime.lastError;
+  });
+  reportShown(false);
+});
 
 // Asks the page which load it is and whether it has sorted reels. Without an
 // answer (it's mid-reload, or has no content script) nothing changes.
