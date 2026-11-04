@@ -1,0 +1,152 @@
+{
+  "version": 3,
+  "rules": {
+    "pkEpochMs": 1314220021721,
+    "videoMediaTypes": [
+      2
+    ],
+    "videoProductTypes": [
+      "clips",
+      "igtv"
+    ],
+    "responses": {
+      "pathContains": [
+        "graphql"
+      ],
+      "bodyPrefixes": [
+        "for (;;);",
+        "for(;;);",
+        "while(1);",
+        ")]}'"
+      ],
+      "pathPrefixes": [
+        "/api/"
+      ],
+      "hosts": [
+        "instagram.com"
+      ],
+      "maxBodyChars": 5000000
+    },
+    "paging": {
+      "reelsListKeys": [
+        "clips",
+        "reels"
+      ],
+      "hasNext": [
+        "page_info.has_next_page",
+        "paging_info.more_available",
+        "more_available",
+        "has_next_page",
+        "has_more"
+      ]
+    },
+    "fields": {
+      "owner": [
+        "user.username",
+        "owner.username",
+        "owner.user.username",
+        "caption.user.username",
+        "author.username",
+        "creator.username"
+      ],
+      "date": [
+        "taken_at",
+        "taken_at_timestamp",
+        "taken_at_seconds"
+      ],
+      "renditionHeight": [
+        "height"
+      ],
+      "thumbnail": [
+        "image_versions2.candidates.0.url",
+        "display_url",
+        "display_uri",
+        "thumbnail_src",
+        "thumbnail_url"
+      ],
+      "code": [
+        "code",
+        "shortcode"
+      ],
+      "comments": [
+        "comment_count",
+        "edge_media_to_comment.count",
+        "edge_media_to_parent_comment.count",
+        "comments.count"
+      ],
+      "caption": [
+        "caption.text",
+        "edge_media_to_caption.edges.0.node.text",
+        "caption_text"
+      ],
+      "isVideo": [
+        "is_video"
+      ],
+      "mediaType": [
+        "media_type"
+      ],
+      "coauthors": [
+        "coauthor_producers",
+        "coauthors",
+        "collaborators"
+      ],
+      "videoVersions": [
+        "video_versions"
+      ],
+      "renditionUrl": [
+        "url"
+      ],
+      "videoDuration": [
+        "video_duration",
+        "duration",
+        "video_length"
+      ],
+      "renditionWidth": [
+        "width"
+      ],
+      "videoUrl": [
+        "video_url"
+      ],
+      "pk": [
+        "pk",
+        "id"
+      ],
+      "coauthorName": [
+        "username",
+        "user.username"
+      ],
+      "views": [
+        "play_count",
+        "ig_play_count",
+        "video_play_count",
+        "view_count",
+        "video_view_count"
+      ],
+      "productType": [
+        "product_type"
+      ],
+      "likes": [
+        "like_count",
+        "edge_liked_by.count",
+        "edge_media_preview_like.count",
+        "likes.count"
+      ]
+    },
+    "version": 3,
+    "limits": {
+      "scrollsWithoutReels": 10,
+      "scrollsWithoutNewReels": 25,
+      "timeLimitAllMs": 600000,
+      "timeLimitMs": 180000
+    },
+    "skipKeys": [
+      "inbox",
+      "thread",
+      "message",
+      "notification"
+    ]
+  },
+  "minExtensionVersion": null,
+  "notice": null,
+  "signature": "XtxIqEedINqs0iS13dyDoh1g73gYIqpc5ZnHOAVacAVNoPyp9QfqWbl9M4YqeTAKbMgJApZeKZH6KdfMx3xHkQ=="
+}

@@ -7,7 +7,7 @@
 // The video is still downloaded here, with the user's own Instagram session;
 // only the file goes to Sortcut, which transcribes (and romanises) it with Groq.
 
-importScripts("lib/config.js", "lib/auth.js", "lib/rules.js");
+importScripts("lib/config.js", "lib/auth.js", "lib/rules.js", "lib/rules-public-key.js", "lib/remote-rules.js");
 
 // The health log, from this worker's DevTools console (chrome://extensions →
 // Sortcut → service worker): sortLog() prints the last 50 sorts, newest first,
@@ -75,16 +75,128 @@ async function writeRules(why) {
   return SORTCUT_RULES;
 }
 
+// ---- Remote rules ----
+// Newer rules may come from GET {API_BASE}/v1/rules, signed on the admin's
+// Mac. lib/remote-rules.js decides whether a reply is used; this fetches it
+// and stores an accepted copy where the bundled one lives
+// (chrome.storage.local.rules, marked source "remote"), so content.js and the
+// page scripts pick it up on the next page load unchanged.
+//
+// Checked at most once an hour, on every occasion that wakes the worker
+// (install and update, browser startup, any other wake-up) and before each
+// sort, without alarms: rulesLastCheckedAt in storage says when the last check
+// began, whatever came of it. The backend has no "no change" reply yet, so the
+// full rules come back each time; ?have= tells it what we hold. A failed,
+// slow, unverified or older reply keeps the current rules, quietly: one line
+// in this worker's console says why.
+var RULES_URL = API_BASE + "/v1/rules";
+var RULES_CHECK_EVERY_MS = 60 * 60 * 1000;
+var RULES_FETCH_TIMEOUT_MS = 8000;
+
+var rulesCheck = null; // the check in flight, so a wake-up that fires several events checks once
+function checkRemoteRules(why) {
+  if (!rulesCheck) {
+    rulesCheck = runRulesCheck(why).finally(function () {
+      rulesCheck = null;
+    });
+  }
+  return rulesCheck;
+}
+
+// Resolves to what happened: "fresh" (checked within the hour), "unreachable",
+// "accepted", "kept", "failed", or why the reply was refused.
+async function runRulesCheck(why) {
+  try {
+    var now = Date.now();
+    var last = (await chrome.storage.local.get({ rulesLastCheckedAt: 0 })).rulesLastCheckedAt;
+    // A time ahead of the clock (the clock was set back) doesn't hold checks off.
+    if (typeof last === "number" && last <= now && now - last < RULES_CHECK_EVERY_MS) return "fresh";
+    await chrome.storage.local.set({ rulesLastCheckedAt: now });
+
+    var current = await mirrorRules(why);
+    var reply = await fetchRemoteRules(current.version);
+    if (!reply) {
+      console.log("[GridSorter] remote rules: unreachable, keeping v" + current.version + " (" + why + ")");
+      return "unreachable";
+    }
+    var verdict = await judgeRemoteRules(reply, {
+      builtinVersion: SORTCUT_RULES.version,
+      storedVersion: current.version,
+      extensionVersion: chrome.runtime.getManifest().version
+    }, crypto.subtle);
+    if (!verdict.ok) {
+      console.log("[GridSorter] remote rules: not used, " + verdict.reason + " (" + why + ")");
+      return verdict.reason;
+    }
+    return await storeRemoteRules(verdict, why);
+  } catch (e) {
+    console.warn("[GridSorter] remote rules: check failed (" + why + ")", e);
+    return "failed";
+  }
+}
+
+// The reply as parsed JSON, or null on any network error, timeout, non-200
+// or oversized body.
+async function fetchRemoteRules(haveVersion) {
+  var ctl = new AbortController();
+  var timer = setTimeout(function () { ctl.abort(); }, RULES_FETCH_TIMEOUT_MS);
+  try {
+    var res = await fetch(RULES_URL + "?have=" + encodeURIComponent(haveVersion), {
+      credentials: "omit",
+      signal: ctl.signal
+    });
+    if (res.status !== 200) return null;
+    if (Number(res.headers.get("content-length")) > REMOTE_RULES_MAX_TEXT) return null;
+    var text = await res.text();
+    if (text.length > REMOTE_RULES_MAX_TEXT) return null;
+    return JSON.parse(text);
+  } catch (e) {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Queued behind the bundled copy's writes, so neither overwrites the other; a
+// copy stored meanwhile that is as new or newer stays. Like mirrorRules, the
+// queue resolves to the rules now in storage. Resolves to "accepted", "kept"
+// or "failed".
+function storeRemoteRules(verdict, why) {
+  var outcome = "failed";
+  rulesQueue = rulesQueue.then(async function () {
+    try {
+      var stored = (await chrome.storage.local.get({ rules: null })).rules;
+      if (stored && typeof stored.version === "number" && stored.version >= verdict.version) {
+        outcome = "kept";
+        return stored;
+      }
+      await chrome.storage.local.set({ rules: verdict.rules });
+      console.log("[GridSorter] remote rules v" + verdict.version + " stored (" + why + ")");
+      outcome = "accepted";
+      return verdict.rules;
+    } catch (e) {
+      console.warn("[GridSorter] couldn't store the remote rules (" + why + ")", e);
+      return SORTCUT_RULES;
+    }
+  });
+  return rulesQueue.then(function () {
+    return outcome;
+  });
+}
+
 chrome.runtime.onInstalled.addListener(function (details) {
   console.log("[GridSorter] installed (" + (details && details.reason) + ")");
   mirrorRules("installed");
+  checkRemoteRules("installed");
 });
 
 chrome.runtime.onStartup.addListener(function () {
   mirrorRules("startup");
+  checkRemoteRules("startup");
 });
 
 mirrorRules("worker start");
+checkRemoteRules("worker start");
 
 // The public web client's app id. Not a secret and not rotated — every
 // instagram.com page sends it as a constant header.
@@ -654,6 +766,9 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
   var asAccount = function (a) { return { ok: true, account: a }; };
   if (msg.type === "account") return reply(account(), sendResponse, asAccount);
   if (msg.type === "plan") {
+    // The popup asks just before every sort (and on opening). The check runs
+    // alongside; anything it accepts applies from the next page load.
+    checkRemoteRules("sort");
     return reply(planInfo(), sendResponse, function (p) { return { ok: true, plan: p }; });
   }
   if (msg.type === "signIn") return reply(signIn().then(account), sendResponse, asAccount);

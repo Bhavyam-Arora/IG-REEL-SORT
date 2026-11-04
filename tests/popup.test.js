@@ -260,6 +260,28 @@ test("worker not answering: no sort starts, rather than one with no range", () =
   assert.match(p.status(), /Extension worker unavailable/);
 });
 
+// ---- The signed rules' notice ----
+
+test("rules notice: a remote copy's notice is a small line; none otherwise", () => {
+  const notice = "Instagram changed today; sorting may be slower.";
+  const p = loadPopup({ store: { rules: { version: 3, source: "remote", notice } } });
+  assert.equal(p.$("rulesNotice").hidden, false);
+  assert.equal(p.$("rulesNotice").textContent, notice);
+
+  for (const rules of [null, { version: 3, source: "remote" }, { version: 2, notice: "not from the server" }]) {
+    const q = loadPopup({ store: { rules } });
+    assert.equal(q.$("rulesNotice").hidden, true, JSON.stringify(rules));
+  }
+});
+
+test("rules notice: set as text, never as markup", () => {
+  const src = fs.readFileSync(path.join(ROOT, "popup.js"), "utf8");
+  assert.ok(!/innerHTML|insertAdjacentHTML|outerHTML/.test(src), "popup.js writes no HTML");
+  const p = loadPopup({ store: { rules: { version: 3, source: "remote", notice: "<b>hi</b>" } } });
+  assert.equal(p.$("rulesNotice").textContent, "<b>hi</b>");
+  assert.equal(p.$("rulesNotice").querySelectorAll("b").length, 0);
+});
+
 // ---- Status: progress and warnings for this page only ----
 
 test("a finished sort shows no summary, Free or Pro", () => {

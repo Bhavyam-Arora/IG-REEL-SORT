@@ -854,6 +854,12 @@ test("health log: every sort gets one entry, with what was asked, kept, left out
   });
 });
 
+test("health log: a sort on the server's rules says so, e.g. remote v3", () => {
+  const page = loadContent();
+  page.result(posts, { sortBy: "views", reason: "end", rules: { source: "remote", version: 3, warning: null } });
+  assert.equal(page.store.health[0].rules, "remote v3");
+});
+
 test("health log: empty, navigated-away and date sorts are logged too", () => {
   const empty = loadContent();
   empty.result([], { reason: "timeout", total: 0, codes: ["no_responses"] });

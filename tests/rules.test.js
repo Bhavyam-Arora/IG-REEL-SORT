@@ -105,6 +105,21 @@ test("a malformed part is filled from the built-in copy; the rest is used as han
   assert.equal(got.version, 42);
 });
 
+test("rules the worker stored from the server are reported as remote, e.g. remote v3", async () => {
+  const v3 = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures/rules-v3-response.json"), "utf8"));
+  const stored = Object.assign({}, v3.rules, { source: "remote", notice: "A notice." });
+  const w = loadPage(REELS_TAB, { rules: stored });
+  const info = w.__IG_SORTER_RULES_INFO__;
+  assert.equal(info.source + " v" + info.version, "remote v3");
+  assert.equal(info.warning, null, "nothing filled from the built-in copy");
+  assert.ok(!("source" in w.__IG_SORTER_RULES__) && !("notice" in w.__IG_SORTER_RULES__), "only rules keys reach the page scripts");
+  for (const b of bodies(fixture("synthetic-reels-tab.json"))) await respond(w, b.url, b.text);
+  assert.equal(w.__IG_SORTER_BUFFER__.length, 12);
+
+  // The bundled copy handed over by content.js is still "content".
+  assert.equal(loadPage(REELS_TAB).__IG_SORTER_RULES_INFO__.source, "content");
+});
+
 test("the rules drive extraction: a new alias is all it takes", async () => {
   const body = JSON.stringify({
     data: { feed: { items: [{ code: "SYNnew00001", user: { username: "demo.creator" }, media_type: 2, brand_new_views: 777 }], page_info: { has_next_page: true } } }

@@ -422,6 +422,17 @@ chrome.storage.onChanged.addListener(function (changes, area) {
   if (area === "local" && changes.auth) accountCall("account");
 });
 
+// ---- Rules notice ----
+// A short line the server's signed rules may carry. The worker only stores
+// one that passed its checks (plain text, at most 200 characters); it is still
+// set as text, never as markup.
+chrome.storage.local.get({ rules: null }, function (o) {
+  var r = o && o.rules;
+  var notice = r && r.source === "remote" && typeof r.notice === "string" ? r.notice.slice(0, 200) : "";
+  $("rulesNotice").textContent = notice;
+  $("rulesNotice").hidden = !notice;
+});
+
 // ---- Developer capture ----
 // Hidden unless storage has devCapture: true (see README). Downloads the last
 // raw GraphQL bodies the interceptor saw in this tab. The file is saved

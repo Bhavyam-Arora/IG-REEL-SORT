@@ -29,7 +29,8 @@ const { loadPage, respond, result, bodies, FIXTURES } = require("./harness");
 const EXPECTED = ".expected.json";
 const samples = fs
   .readdirSync(FIXTURES)
-  .filter((f) => f.endsWith(".json") && !f.endsWith(EXPECTED))
+  // rules-*.json are signed /v1/rules replies (tests/remote-rules.test.js), not Instagram samples.
+  .filter((f) => f.endsWith(".json") && !f.endsWith(EXPECTED) && !f.startsWith("rules-"))
   .sort();
 
 const read = (f) => JSON.parse(fs.readFileSync(path.join(FIXTURES, f), "utf8"));

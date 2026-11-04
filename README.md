@@ -185,6 +185,33 @@ worker (`getRules`), which writes it and sends it back, and injects with that
 built-in copy in `lib/extract.js`, and the sort records that as a warning
 (`sortState.rulesWarning` and the health log's `rules` / `rulesWarning`).
 
+### Remote rules (`GET /v1/rules`)
+
+Newer rules can come from the backend without a new build. The worker fetches
+`{API_BASE}/v1/rules?have=<version>` at most once an hour (no `alarms`
+permission). It checks on install and update, browser startup, any other
+wake-up, and when the popup asks for the plan before a sort.
+`chrome.storage.local.rulesLastCheckedAt` records when the last check began.
+The backend has no "no change" reply yet, so the full rules come back each time.
+`lib/remote-rules.js` uses a reply only if all of these hold:
+
+- its ECDSA P-256 signature verifies against the pinned public key
+  (`lib/rules-public-key.js`), over the canonical JSON the backend's
+  `scripts/admin/rules-common.mjs` signs;
+- its `rules` pass a strict schema: exactly `lib/rules.js`'s keys, typed string
+  patterns, no URLs or code, Instagram hosts only, and capped lists, strings and
+  numbers;
+- its version is higher than the built-in copy and anything stored;
+- this build is at least its `minExtensionVersion`.
+
+An accepted copy is stored as `chrome.storage.local.rules` with
+`source: "remote"`, plus its `notice` if it has one, which the popup shows as
+text. Page scripts read it on the next page load, report it as
+`__IG_SORTER_RULES_INFO__` (for example "remote v3"), and the health log records
+it the same way. Anything else, including a network error or an 8-second
+timeout, keeps the current rules, and the worker console logs one line saying
+why. A build whose own `lib/rules.js` is newer replaces a stored remote copy.
+
 ### Why a sort failed
 
 Every failed or partial sort stores reason codes in `sortState.codes`, and the
@@ -296,6 +323,8 @@ After any code change, click the reload arrow on the extension card.
 | `lib/config.js` | worker | Environment settings, `FREE_MAX_REELS` |
 | `lib/auth.js` | worker | Google sign-in, tokens, API helper, `isPro()` |
 | `lib/rules.js` | worker | Data only: every Instagram name, address and stop limit |
+| `lib/rules-public-key.js` | worker | Public key that verifies the server's signed rules |
+| `lib/remote-rules.js` | worker | Signature, schema and version checks on `GET /v1/rules` |
 | `lib/extract.js` | page, popup | Rules handover and fallback; extraction; reels-tab URL check and ownership |
 | `page/interceptor.js` | page | XHR + fetch response hooks |
 | `page/collector.js` | page | Scroll loop, stop rules, sort, handoff |

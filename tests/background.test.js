@@ -12,6 +12,7 @@ const S3 = "https://bucket.test/upload";
 const CDN = "https://scontent.cdninstagram.com/v/reel.mp4";
 const ME = "amazonaws.com/v1/me";
 const HOUR = 3600e3;
+const MANIFEST = JSON.parse(fs.readFileSync(path.join(ROOT, "manifest.json"), "utf8"));
 
 function res(status, opts) {
   opts = opts || {};
@@ -37,6 +38,9 @@ function loadWorker(opts) {
   if (opts.signedIn !== false) {
     local.auth = { accessToken: "a", refreshToken: "r", accessExpiresAt: Date.now() + 3600e3 };
   }
+  // The remote rules were checked a moment ago, so a worker start fetches
+  // nothing, unless a test wants the check due.
+  if (!opts.rulesDue && !("rulesLastCheckedAt" in local)) local.rulesLastCheckedAt = Date.now();
   const calls = [];
   const warnings = [];
   const pings = [];
@@ -56,6 +60,7 @@ function loadWorker(opts) {
         onInstalled: { addListener: (fn) => lifecycle.installed.push(fn) },
         onStartup: { addListener: (fn) => lifecycle.startup.push(fn) },
         onMessage: { addListener: (fn) => (onMessage = fn) },
+        getManifest: () => ({ version: opts.extensionVersion || MANIFEST.version }),
         getPlatformInfo: async () => (pings.push(Date.now()), { os: "mac" })
       },
       storage: { local: area(local), session: area(session) },
@@ -75,8 +80,8 @@ function loadWorker(opts) {
       }
       throw new Error("unexpected fetch " + url);
     },
-    FormData, Blob, URL, URLSearchParams, crypto,
-    setTimeout,
+    FormData, Blob, URL, URLSearchParams, crypto, atob, TextEncoder, AbortController,
+    setTimeout, clearTimeout,
     setInterval: (fn, ms) => {
       const t = setInterval(fn, ms);
       intervals.add(t);
@@ -433,7 +438,7 @@ test("rules, after a reload: install/update and browser startup each write them"
     wake(sw);
     await settled();
     assert.equal(sw.local.rules && sw.local.rules.version, sw.run("SORTCUT_RULES.version"), String(wake));
-    assert.deepEqual(Object.keys(sw.local).sort(), ["auth", ...Object.keys(AFTER_RELOAD), "rules"].sort(), "nothing else touched");
+    assert.deepEqual(Object.keys(sw.local).sort(), ["auth", "rulesLastCheckedAt", ...Object.keys(AFTER_RELOAD), "rules"].sort(), "nothing else touched");
   }
 });
 
@@ -454,6 +459,122 @@ test("rules: asked while a newer copy is stored, the newer copy is the answer", 
   const r = await sw.send({ type: "getRules" });
   assert.deepEqual(JSON.parse(JSON.stringify(r.rules)), newer);
   assert.deepEqual(sw.local.rules, newer);
+});
+
+// ---- Remote rules ----
+// The worker fetches GET /v1/rules at most once an hour and stores a reply
+// lib/remote-rules.js accepts (tests/remote-rules.test.js has the checks).
+
+const V3_TEXT = fs.readFileSync(path.join(__dirname, "fixtures/rules-v3-response.json"), "utf8");
+const RULES_ROUTE = "amazonaws.com/v1/rules";
+const v3 = () => res(200, { body: V3_TEXT });
+const rulesCalls = (sw) => sw.calls.filter((u) => u.indexOf(RULES_ROUTE) !== -1);
+const bundledVersion = (sw) => sw.run("SORTCUT_RULES.version");
+const clone = (x) => JSON.parse(JSON.stringify(x));
+
+test("remote rules: a due check fetches v3, verifies it and stores it as remote", async () => {
+  const sw = loadWorker({ rulesDue: true, routes: { [RULES_ROUTE]: v3 } });
+  assert.equal(await sw.run('checkRemoteRules("test")'), "accepted");
+  assert.equal(sw.local.rules.version, 3);
+  assert.equal(sw.local.rules.source, "remote");
+  assert.deepEqual(clone(sw.local.rules.fields.views), JSON.parse(V3_TEXT).rules.fields.views);
+  assert.ok(Math.abs(sw.local.rulesLastCheckedAt - Date.now()) < 5000);
+  // It asked once, saying what it had, and sent no cookies.
+  assert.deepEqual(rulesCalls(sw), [sw.run("API_BASE") + "/v1/rules?have=" + bundledVersion(sw)]);
+  // content.js asking now gets the remote copy.
+  const r = await sw.send({ type: "getRules" });
+  assert.equal(r.rules.source, "remote");
+  assert.equal(r.rules.version, 3);
+});
+
+test("remote rules: at most once an hour, whatever wakes the worker", async () => {
+  const sw = loadWorker({ rulesDue: true, routes: { [RULES_ROUTE]: v3 } });
+  await sw.run('checkRemoteRules("test")');
+  sw.installed("update");
+  sw.startup();
+  await sw.send({ type: "plan" });
+  assert.equal(await sw.run('checkRemoteRules("again")'), "fresh");
+  assert.equal(rulesCalls(sw).length, 1);
+
+  // An hour on, the next wake-up checks again: v3 is what's stored, so it stays.
+  sw.local.rulesLastCheckedAt -= HOUR;
+  assert.equal(await sw.run('checkRemoteRules("later")'), "v3 is not newer than v3");
+  assert.equal(rulesCalls(sw).length, 2);
+  assert.equal(sw.local.rules.version, 3);
+});
+
+test("remote rules: install, startup, worker start and a sort each check when due", async () => {
+  const wakes = {
+    "worker start": () => {},
+    installed: (sw) => sw.installed("install"),
+    startup: (sw) => sw.startup(),
+    sort: (sw) => sw.send({ type: "plan" })
+  };
+  for (const [name, wake] of Object.entries(wakes)) {
+    const sw = loadWorker({ rulesDue: true, routes: { [RULES_ROUTE]: v3, [ME]: me("none") } });
+    if (name !== "worker start") {
+      await sw.run("rulesCheck"); // let the worker-start check finish, then make it due again
+      sw.local.rulesLastCheckedAt = 0;
+      delete sw.local.rules;
+    }
+    await wake(sw);
+    await sw.run("rulesCheck");
+    await settled();
+    assert.equal(sw.local.rules && sw.local.rules.source, "remote", name);
+  }
+});
+
+test("remote rules: a network failure keeps the current rules", async () => {
+  const down = () => {
+    throw new TypeError("Failed to fetch");
+  };
+  const sw = loadWorker({ rulesDue: true, routes: { [RULES_ROUTE]: down } });
+  assert.equal(await sw.run('checkRemoteRules("test")'), "unreachable");
+  assert.equal(sw.local.rules.version, bundledVersion(sw));
+  assert.equal(sw.local.rules.source, undefined);
+
+  // And a stored remote copy stays through a failure, a 500 and a junk body.
+  const stored = Object.assign(JSON.parse(V3_TEXT).rules, { source: "remote" });
+  for (const route of [down, () => res(500, { body: "{}" }), () => res(200, { body: "<html>" })]) {
+    const kept = loadWorker({ rulesDue: true, local: { rules: clone(stored) }, routes: { [RULES_ROUTE]: route } });
+    assert.equal(await kept.run('checkRemoteRules("test")'), "unreachable");
+    assert.deepEqual(clone(kept.local.rules), stored);
+  }
+});
+
+test("remote rules: a reply slower than the timeout keeps the current rules", async () => {
+  const hang = (url, init) =>
+    new Promise((resolve, reject) => init.signal.addEventListener("abort", () => reject(new Error("aborted"))));
+  const sw = loadWorker({ routes: { [RULES_ROUTE]: hang } });
+  assert.equal(sw.run("RULES_FETCH_TIMEOUT_MS"), 8000);
+  await sw.run("rulesCheck"); // the worker-start check: not due
+  sw.run("RULES_FETCH_TIMEOUT_MS = 20");
+  sw.local.rulesLastCheckedAt = 0;
+  assert.equal(await sw.run('checkRemoteRules("test")'), "unreachable");
+  assert.equal(sw.local.rules.version, bundledVersion(sw));
+});
+
+test("remote rules: a tampered reply is thrown away", async () => {
+  const bad = JSON.parse(V3_TEXT);
+  bad.rules.limits.timeLimitMs = 3600000;
+  const sw = loadWorker({ rulesDue: true, routes: { [RULES_ROUTE]: () => res(200, { body: JSON.stringify(bad) }) } });
+  assert.equal(await sw.run('checkRemoteRules("test")'), "bad signature");
+  assert.equal(sw.local.rules.version, bundledVersion(sw));
+});
+
+test("remote rules: v3 sets no minimum extension version, so even an old build uses it", async () => {
+  const sw = loadWorker({ rulesDue: true, extensionVersion: "0.0.1", routes: { [RULES_ROUTE]: v3 } });
+  assert.equal(await sw.run('checkRemoteRules("test")'), "accepted", "no minimum: any build may use it");
+});
+
+test("remote rules: a build whose own rules are newer replaces a stored remote copy", async () => {
+  const stored = Object.assign(JSON.parse(V3_TEXT).rules, { source: "remote" });
+  const sw = loadWorker({ local: { rules: clone(stored) } });
+  sw.run("SORTCUT_RULES.version = 4");
+  sw.installed("update");
+  await settled();
+  assert.equal(sw.local.rules.version, 4);
+  assert.equal(sw.local.rules.source, undefined);
 });
 
 // ---- The health log ----

@@ -271,3 +271,5 @@ footer p {
   color: var(--muted);
 }
 footer .dim { color: #6E6880; margin-top: 2px; }
+footer .notice { color: var(--signal); margin-bottom: 4px; }
+footer .notice[hidden] { display: none; }
