@@ -345,16 +345,38 @@ function serverMessage(res) {
   return res.data && typeof res.data.error === "string" ? res.data.error : "";
 }
 
-// Short, plain messages for the tile and popup. The backend's 402 body carries
-// only a sentence, so the two cases are told apart by its wording.
+// The backend's stable name for a refusal (decisions.md §13). The wording of
+// its "error" sentence may change; this may not.
+function serverCode(res) {
+  return res.data && typeof res.data.code === "string" ? res.data.code : "";
+}
+
+// "3:45 PM" in the user's own clock, or "" when the time can't be read.
+function localTime(iso) {
+  var d = new Date(iso);
+  if (typeof iso !== "string" || isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+// Short, plain messages for the tile and popup, chosen by the backend's code.
+// not_pro never gets here: apiError turns it into the Upgrade dialog.
 function errorText(res) {
   var msg = serverMessage(res);
-  if (res.status === 402) {
-    if (/used all/i.test(msg)) return "You've used all your transcripts for this period.";
-    if (/Sortcut Pro/i.test(msg)) return "Transcription is part of Sortcut Pro.";
-    return msg || "Transcription is part of Sortcut Pro.";
+  switch (serverCode(res)) {
+    case "quota_exhausted":
+      return "You've used all your transcriptions for this period. They reset when your plan renews.";
+    case "quota_missing":
+      return "Your transcriptions for this period aren't ready yet. Try again shortly, or write to support@sortcut.co.";
+    case "too_many_running":
+      return "Up to 3 transcriptions can run at once. Wait for one to finish.";
+    case "hourly_limit":
+      var at = localTime(res.data.retryAt);
+      if (at) return "Hourly limit reached — try again after " + at + ".";
+      break;
+    case "":
+      // API Gateway's own throttle, which carries no code and no "error".
+      if (res.status === 429) return "Sortcut is busy — try again in a minute.";
   }
-  if (res.status === 429) return msg || "Too many transcriptions at once. Try again shortly.";
   if (res.status === 409 || res.status === 413) return uploadFailed("HTTP " + res.status);
   return msg || "Something went wrong (HTTP " + res.status + "). Please try again.";
 }
@@ -368,10 +390,10 @@ function needsProError() {
   return err;
 }
 
-// A refused call. The backend has the last word on the plan: a 402 that isn't
-// about used-up transcripts means the account isn't Pro, whatever we last saw.
+// A refused call. The backend has the last word on the plan: not_pro means the
+// account isn't Pro, whatever we last saw.
 function apiError(res) {
-  if (res.status === 402 && !/used all/i.test(serverMessage(res))) return needsProError();
+  if (serverCode(res) === "not_pro") return needsProError();
   return new Error(errorText(res));
 }
 

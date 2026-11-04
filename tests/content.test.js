@@ -1026,6 +1026,9 @@ test("devForceFailure: the next sort ends with the code, offers the report, and 
   assert.equal(page.$("ig-sorter-wrap"), null, "no sorted grid, as a real failure would have none");
   assert.ok(!("devForceFailure" in page.store), "removed from storage");
   assert.deepEqual([...page.store.health[0].codes], ["reels_but_none_from_profile"], "the health log records what was shown");
+  // A plain log, so Chrome's Errors page doesn't list it as a bug.
+  assert.ok(page.logged.some((l) => /^\[GridSorter\] devForceFailure: this sort ends with reels_but_none_from_profile/.test(l)), page.logged.join("\n"));
+  assert.ok(!page.logged.some((l) => /^WARN .*devForceFailure/.test(l)), page.logged.join("\n"));
 
   // The next result on the same page is left alone.
   page.result(posts, { reason: "complete", codes: [], profilePrivate: false });

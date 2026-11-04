@@ -399,18 +399,81 @@ test("signed in on Free: needsPro, before any transcription call", async () => {
   assert.equal(sw.warnings.length, 0, "not logged as a failure");
 });
 
-test("a backend 402 for the plan is needsPro too; used-up transcripts are not", async () => {
-  for (const [msg, needsPro] of [
-    ["Transcription is part of Sortcut Pro.", true],
-    ["You've used all 200 transcripts for this period.", false]
-  ]) {
-    const r0 = routes(() => res(200));
-    r0["/v1/transcriptions"] = () => res(402, { body: { error: msg } });
-    const sw = loadWorker({ routes: r0 });
-    const r = await sw.send({ type: "transcribe", post: POST });
-    assert.equal(r.ok, false);
-    assert.equal(r.needsPro, needsPro, msg);
+// ---- Backend refusals, by code (decisions.md §13) ----
+
+// The refusal on job creation, or on /submit after a successful upload.
+async function refused(status, body, at) {
+  const r0 = routes(() => res(200, { buffer: { byteLength: 5_000_000 } }));
+  const ok = r0["/v1/transcriptions"];
+  r0["/v1/transcriptions"] = (url) =>
+    (at === "submit" ? /submit$/.test(url) : !/submit$/.test(url)) ? res(status, { body }) : ok(url);
+  const sw = loadWorker({ routes: r0 });
+  const r = await sw.send({ type: "transcribe", post: POST });
+  assert.equal(r.ok, false);
+  return r;
+}
+
+test("code not_pro: the Upgrade dialog, on create or submit, whatever the message says", async () => {
+  for (const at of ["create", "submit"]) {
+    const r = await refused(402, { error: "You've used all 200 transcripts.", code: "not_pro" }, at);
+    assert.equal(r.needsPro, true, at);
+    assert.equal(r.error, "Transcription is part of Sortcut Pro.", at);
   }
+});
+
+test("code quota_exhausted: used up, resets on renewal; not the Upgrade dialog", async () => {
+  for (const at of ["create", "submit"]) {
+    const r = await refused(402, { error: "Transcription is part of Sortcut Pro.", code: "quota_exhausted" }, at);
+    assert.equal(r.needsPro, false, at);
+    assert.equal(r.error, "You've used all your transcriptions for this period. They reset when your plan renews.", at);
+  }
+});
+
+test("code quota_missing: not ready yet, with the support address", async () => {
+  const r = await refused(402, { error: "Something about quota.", code: "quota_missing" });
+  assert.equal(r.needsPro, false);
+  assert.equal(r.error, "Your transcriptions for this period aren't ready yet. Try again shortly, or write to support@sortcut.co.");
+});
+
+test("code too_many_running: up to 3 at once", async () => {
+  const r = await refused(429, { error: "Up to 3 transcriptions can run at once.", code: "too_many_running" });
+  assert.equal(r.needsPro, false);
+  assert.equal(r.error, "Up to 3 transcriptions can run at once. Wait for one to finish.");
+});
+
+test("code hourly_limit: says when to try again, in local time", async () => {
+  const retryAt = "2026-11-05T15:45:00Z";
+  const r = await refused(429, { error: "Hourly limit reached.", code: "hourly_limit", retryAt }, "submit");
+  const local = new Date(retryAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  assert.equal(r.error, "Hourly limit reached — try again after " + local + ".");
+  assert.ok(!r.error.includes(retryAt), "not the raw ISO time");
+});
+
+test("code hourly_limit without a readable retryAt: the server's message", async () => {
+  for (const retryAt of [undefined, "soon"]) {
+    const r = await refused(429, { error: "Hourly limit reached. Try again later.", code: "hourly_limit", retryAt }, "submit");
+    assert.equal(r.error, "Hourly limit reached. Try again later.", String(retryAt));
+  }
+});
+
+test("a 429 with no code (API Gateway's throttle): Sortcut is busy", async () => {
+  const r = await refused(429, { message: "Too Many Requests" });
+  assert.equal(r.needsPro, false);
+  assert.equal(r.error, "Sortcut is busy — try again in a minute.");
+});
+
+test("an unknown or missing code: the server's message, never matched by wording", async () => {
+  for (const [status, body] of [
+    [402, { error: "Transcription is part of Sortcut Pro." }],
+    [402, { error: "You've used all 200 transcripts for this period.", code: "something_new" }],
+    [429, { error: "Slow down a little.", code: "something_new" }]
+  ]) {
+    const r = await refused(status, body);
+    assert.equal(r.needsPro, false, JSON.stringify(body));
+    assert.equal(r.error, body.error, JSON.stringify(body));
+  }
+  const bare = await refused(402, {});
+  assert.equal(bare.error, "Something went wrong (HTTP 402). Please try again.");
 });
 
 // ---- Rules ----

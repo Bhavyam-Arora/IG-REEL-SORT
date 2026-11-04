@@ -1372,7 +1372,7 @@
     try {
       chrome.storage.local.remove("devForceFailure");
     } catch (e) {}
-    console.warn("[GridSorter] devForceFailure: this sort ends with " + code + " (switch now off)");
+    console.log("[GridSorter] devForceFailure: this sort ends with " + code + " (switch now off)");
     var out = {};
     for (var k in d) out[k] = d[k];
     out.codes = [code];
