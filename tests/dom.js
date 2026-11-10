@@ -185,7 +185,7 @@ function createDocument() {
     }
     get isConnected() {
       let n = this;
-      while (n.parentElement) n = n.parentElement;
+      while (n.parentElement || n.host) n = n.parentElement || n.host;
       return n === doc.documentElement;
     }
     get nextElementSibling() {
@@ -229,6 +229,17 @@ function createDocument() {
     contains(n) {
       for (; n; n = n.parentElement) if (n === this) return true;
       return false;
+    }
+    // A shadow root: an element of its own, reached from the host. Like a real
+    // one it isn't among the host's children, so the page's selectors don't
+    // find what's inside; a test reaches in through _shadowRoot, closed or not.
+    attachShadow(init) {
+      const root = new Element("#shadow-root");
+      root.host = this;
+      root.mode = init && init.mode;
+      this._shadowRoot = root;
+      if (root.mode === "open") this.shadowRoot = root;
+      return root;
     }
     matches(sel) { return parse(sel).some((c) => matchesOne(this, c)); }
     closest(sel) {

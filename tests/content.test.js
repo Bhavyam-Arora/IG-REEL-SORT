@@ -44,6 +44,7 @@ function loadContent(opts) {
   const sent = [];
   const loads = [];
   const rulesAsks = [];
+  const proAsks = [];
   const ticks = [];
   const opened = [];
   const files = [];
@@ -61,6 +62,13 @@ function loadContent(opts) {
         if (msg.type === "pageLoad") {
           loads.push(msg);
           if (cb) cb({ ok: true, tabId: opts.tabId === undefined ? 7 : opts.tabId });
+          return;
+        }
+        // The results header asks whether to show Similar accounts: opts.pro
+        // is the worker's answer, Free unless a test says otherwise.
+        if (msg.type === "isPro") {
+          proAsks.push(msg);
+          if (cb) cb(opts.proReply !== undefined ? opts.proReply : { ok: true, pro: !!opts.pro });
           return;
         }
         // No rules in storage: content.js asks the worker. The answer is
@@ -92,7 +100,10 @@ function loadContent(opts) {
           Object.assign(store, o);
           if (cb) cb();
         },
-        remove(k) { [].concat(k).forEach((key) => delete store[key]); }
+        remove(k, cb) {
+          [].concat(k).forEach((key) => delete store[key]);
+          if (cb) cb();
+        }
       },
       onChanged: { addListener() {} }
     }
@@ -114,6 +125,7 @@ function loadContent(opts) {
     // Held, not run: the 4s return-to-idle timer and the download cleanup
     // never need to fire; a test fires the ones it cares about by delay.
     setTimeout: (fn, ms) => (timers.push({ fn, ms }), timers.length),
+    clearTimeout: (id) => { if (timers[id - 1]) timers[id - 1].fn = () => {}; },
     TextEncoder,
     // Every download: the anchor content.js clicks names the file.
     Blob: class {
@@ -160,6 +172,7 @@ function loadContent(opts) {
     lastFile,
     $: (id) => document.getElementById(id),
     rulesAsks,
+    proAsks,
     logged,
     answerRules: (reply) => rulesAsks.forEach((cb) => cb(reply)),
     // Fire the held timers set with this delay.
@@ -180,6 +193,10 @@ function loadContent(opts) {
           }, extra)
         });
       }
+    },
+    // Any other message from the page world, e.g. the collector's progress.
+    post(data) {
+      for (const fn of listeners.message) fn({ source: self, data: Object.assign({ source: "ig-sorter" }, data) });
     },
     // A message from the popup.
     popup(msg) {
@@ -253,7 +270,7 @@ test("restore: every hidden node gets back exactly the display it had", async ()
   }
 });
 
-test("failure: a dismissible card on the reel and the same words in storage for the popup", () => {
+test("failure: a red-tinted card with today's words, and the same words in storage for the popup", () => {
   const text = "This reel can't be transcribed — it's about 31 MB, over our current 24 MB limit. No credit was used.";
   const page = loadContent({
     onMessage: (msg) => (msg.type === "transcribe" ? { ok: false, error: text } : undefined)
@@ -263,29 +280,31 @@ test("failure: a dismissible card on the reel and the same words in storage for 
   const btn = page.document.querySelectorAll(".igs-tx")[1];
   btn.click();
 
-  const cell = btn.parentElement.parentElement;
-  const card = cell.querySelector(".igs-card");
+  const card = page.document.querySelector(".igs-result");
   assert.ok(card, "card shown");
-  assert.equal(card.querySelector(".igs-card-msg").textContent, text);
+  assert.ok(card.classList.contains("is-bad"), "red-tinted");
+  assert.equal(card.querySelector("h2").textContent, "Couldn't transcribe");
+  assert.equal(card.querySelector(".igs-result-msg").textContent, text);
+  assert.equal(card.querySelector(".igs-result-sub").textContent, "R2");
+  assert.ok(btn.classList.contains("is-error"), "the tile says so too");
   assert.equal(page.store.transcribeStatus.text, text);
   assert.equal(page.store.transcribeStatus.ok, false);
   assert.equal(page.store.transcribeStatus.code, "R2");
-  // Only that reel.
-  assert.equal(page.document.querySelectorAll(".igs-card").length, 1);
+  assert.equal(page.$("ig-sorter-tx-progress"), null, "the pill goes when the job does");
 
   card.querySelector(".igs-x").click();
-  assert.equal(cell.querySelector(".igs-card"), null, "dismissed");
+  assert.equal(page.document.querySelector(".igs-result"), null, "dismissed");
 
-  // A retry clears an old card before it starts.
+  // Tried again: a fresh card.
   btn.click();
-  assert.equal(page.document.querySelectorAll(".igs-card").length, 1);
+  assert.equal(page.document.querySelectorAll(".igs-result").length, 1);
 });
 
 test("failure: a worker that never answers still gets a card", () => {
   const page = loadContent({ onMessage: () => null });
   page.result(posts);
   page.document.querySelector(".igs-tx").click();
-  const card = page.document.querySelector(".igs-card");
+  const card = page.document.querySelector(".igs-result");
   assert.match(card.textContent, /Extension worker unavailable/);
   assert.match(page.store.transcribeStatus.text, /Extension worker unavailable/);
 });
@@ -316,7 +335,7 @@ test("signed out: the dialog opens first, and Google only from its button", () =
   const go = dialog.querySelector(".igs-btn");
   assert.equal(go.textContent, "Sign in with Google");
   assert.ok(dialog.querySelector(".igs-x"), "close button");
-  assert.equal(page.document.querySelector(".igs-card"), null, "signed out isn't a failure card");
+  assert.equal(page.document.querySelector(".igs-result"), null, "signed out isn't a failure card");
   assert.deepEqual(page.sent.map((m) => m.type), ["transcribe"], "Google not opened yet");
 
   // Google's window closed.
@@ -329,7 +348,8 @@ test("signed out: the dialog opens first, and Google only from its button", () =
   // Signed in: the dialog goes and the same reel is transcribed.
   signIn = { ok: true };
   go.click();
-  assert.equal(page.document.querySelector(".igs-modal"), null, "dialog closed");
+  assert.equal(page.$("igs-dialog-title"), null, "dialog closed");
+  assert.match(page.document.querySelector(".igs-result").textContent, /after sign-in/, "this time it was tried");
   assert.deepEqual(page.sent.map((m) => m.type), ["transcribe", "pageSignIn", "pageSignIn", "transcribe"]);
   assert.equal(page.sent[3].post.code, "R1");
 });
@@ -348,7 +368,7 @@ test("signed out: closing the dialog (× or Escape) does nothing else", () => {
   assert.equal(page.document.querySelector(".igs-modal"), null);
 
   assert.deepEqual(page.sent.map((m) => m.type), ["transcribe", "transcribe"]);
-  assert.equal(page.document.querySelector(".igs-card"), null);
+  assert.equal(page.document.querySelector(".igs-result"), null);
   assert.equal(btn.disabled, false);
 });
 
@@ -384,7 +404,7 @@ test("signed in on Free: the Upgrade dialog, which opens the pricing page", () =
   const go = dialog.querySelector(".igs-btn");
   assert.equal(go.textContent, "Upgrade to Pro");
   assert.ok(dialog.querySelector(".igs-x"), "close button");
-  assert.equal(page.document.querySelector(".igs-card"), null, "not a failure card");
+  assert.equal(page.document.querySelector(".igs-result"), null, "not a failure card");
   assert.equal(page.store.transcribeStatus, undefined, "nor a failure in the popup");
   assert.equal(btn.disabled, false);
 
@@ -421,7 +441,7 @@ test("signed out, then signs in to a Free account: the Upgrade dialog instead of
   assert.equal(dialog.querySelector(".igs-btn").textContent, "Upgrade to Pro");
   assert.equal(page.document.querySelectorAll(".igs-modal").length, 1, "only the one");
   assert.deepEqual(page.sent.map((m) => m.type), ["transcribe", "pageSignIn", "transcribe"]);
-  assert.equal(page.document.querySelector(".igs-card"), null);
+  assert.equal(page.document.querySelector(".igs-result"), null);
 });
 
 // ---- Free: no date range anywhere ----
@@ -1098,4 +1118,681 @@ test("report offer: the health log still keeps the profile name locally, and the
   page.result([], failed("no_responses"));
   assert.equal(page.store.health[0].profile, "demo");
   assert.ok(!("profile" in page.store.sortState.report));
+});
+
+// ---- On-page design: theme, progress pill, results header ----
+
+// A page whose <body> and <html> have these computed backgrounds.
+const themed = (body, html) => ({
+  window: {
+    getComputedStyle: (n) => ({
+      backgroundColor: n.tagName === "BODY" ? body : html,
+      getPropertyValue: () => ""
+    })
+  }
+});
+
+test("theme: the sorted view and dialogs follow Instagram's light or dark background", () => {
+  const cases = [
+    [{}, "light"], // nothing readable
+    [themed("rgb(255, 255, 255)", "rgba(0, 0, 0, 0)"), "light"],
+    [themed("rgb(0, 0, 0)", "rgba(0, 0, 0, 0)"), "dark"],
+    [themed("rgb(18, 18, 18)", "rgb(255, 255, 255)"), "dark"],
+    // A transparent body shows the root's background.
+    [themed("rgba(0, 0, 0, 0)", "rgb(0, 0, 0)"), "dark"],
+    [themed("transparent", "rgb(250, 250, 250)"), "light"]
+  ];
+  for (const [opts, want] of cases) {
+    const page = loadContent(Object.assign({ onMessage: (m) => (m.type === "transcribe" ? { ok: false, needsPro: true } : undefined) }, opts));
+    page.result(posts);
+    const wrap = page.$("ig-sorter-wrap");
+    assert.ok(wrap.hasAttribute("data-sortcut"), "the tokens apply under it");
+    assert.equal(wrap.getAttribute("data-theme"), want, JSON.stringify(opts.window && opts.window.getComputedStyle({ tagName: "BODY" })));
+    page.document.querySelector(".igs-tx").click();
+    assert.equal(page.document.querySelector(".igs-modal").getAttribute("data-theme"), want);
+  }
+});
+
+test("progress: the reload a sort started shows the pill at once, and the grid dims behind it", () => {
+  const page = loadContent({ job: { sortBy: "views", limit: 100, tabId: 7 } });
+  const pill = page.$("ig-sorter-progress");
+  assert.ok(pill, "pill up before the first progress message");
+  assert.match(pill.textContent, /^Collecting reels — don't scroll$/);
+  assert.equal(page.$("grid").getAttribute("data-ig-sorter-dim"), "1");
+  assert.equal(pill.querySelector(".igs-bar").querySelector("i").style.width, "0%");
+});
+
+test("progress: the collector's count and target move the pill; All reels has no target", () => {
+  const page = loadContent({ job: { sortBy: "views", limit: 100, tabId: 7 } });
+  page.post({ type: "progress", sortBy: "views", collected: 44, target: 100 });
+  const pill = page.$("ig-sorter-progress");
+  assert.equal(pill.textContent, "Collecting reels — don't scroll · 44 found");
+  assert.equal(pill.querySelector(".igs-bar").querySelector("i").style.width, "44%");
+  assert.equal(page.store.sortState.message, "Collecting reels… 44 of 100 so far.", "the popup's words unchanged");
+
+  page.post({ type: "progress", sortBy: "views", collected: 120, target: null });
+  assert.match(pill.textContent, /· 120 found$/);
+  assert.ok(pill.querySelector(".igs-bar").classList.contains("is-open"));
+  assert.equal(page.document.querySelectorAll("#ig-sorter-progress").length, 1, "one pill");
+});
+
+test("progress: the result takes the pill and the dimming away, sorted or not", () => {
+  for (const got of [posts, []]) {
+    const page = loadContent({ job: { sortBy: "views", limit: 100, tabId: 7 } });
+    page.post({ type: "progress", sortBy: "views", collected: 3, target: 100 });
+    page.result(got, got.length ? {} : { codes: ["no_responses"] });
+    assert.equal(page.$("ig-sorter-progress"), null);
+    assert.equal(page.document.querySelectorAll("[data-ig-sorter-dim]").length, 0);
+  }
+});
+
+test("progress: leaving the profile mid-run takes the pill away", () => {
+  const page = loadContent({ job: { sortBy: "views", limit: 100, tabId: 7 } });
+  page.go("/someone.else/");
+  assert.equal(page.$("ig-sorter-progress"), null);
+  assert.equal(page.$("grid").hasAttribute("data-ig-sorter-dim"), false);
+});
+
+test("results header: the title names the sort; the median shows only for outlier sorts", () => {
+  const head = (page) => ({
+    title: page.document.querySelector(".igs-title").textContent,
+    sub: page.document.querySelector(".igs-sub").textContent
+  });
+  const views = loadContent();
+  views.result(posts);
+  assert.deepEqual(head(views), { title: "Top reels by views", sub: "3 reels" });
+
+  const likes = loadContent();
+  likes.result(posts, { sortBy: "likes", ranked: 2 });
+  assert.deepEqual(head(likes), { title: "Top reels by likes", sub: "3 reels · 1 with no likes" });
+
+  const scored = posts.map((p, i) => Object.assign({}, p, { outlierScore: [4.2, 1, 0.5][i] }));
+  const out = loadContent();
+  out.result(scored, { sortBy: "outlier", median: 12400 });
+  assert.deepEqual(head(out), { title: "Outlier reels by views", sub: "3 reels · median 12.4K views" });
+  assert.deepEqual(out.document.querySelectorAll(".igs-score").map((b) => b.textContent), ["4.2x"], "above the median only");
+  assert.ok(out.document.querySelector(".igs-cell").classList.contains("igs-top"), "#1 gets the ring");
+  assert.equal(out.document.querySelectorAll(".igs-top").length, 1);
+});
+
+test("results header: Export offers the popup's four exports, through the same functions", () => {
+  const page = loadContent({ onMessage: (m) => (m.type === "sheetsExport" ? { ok: true, url: "x" } : undefined) });
+  page.result(posts);
+  const menu = page.document.querySelector(".igs-menu");
+  const toggle = page.document.querySelector("[aria-haspopup]");
+  assert.equal(toggle.textContent, "Export");
+  assert.equal(menu.hidden, true);
+  toggle.click();
+  assert.equal(menu.hidden, false);
+  const items = menu.querySelectorAll(".igs-menu-item");
+  assert.deepEqual(items.map((b) => b.textContent), ["CSV", "JSON", "Excel", "Google Sheets"]);
+
+  items[0].click();
+  assert.equal(page.lastFile().name, "demo-sorted.csv");
+  assert.equal(menu.hidden, true, "a pick closes the menu");
+  items[2].click();
+  assert.equal(page.lastFile().name, "demo-sorted.xlsx");
+
+  items[3].click();
+  assert.deepEqual({ ...page.sent.find((m) => m.type === "sheetsExport") }, { type: "sheetsExport", tabId: 7 });
+  assert.equal(page.document.querySelector(".igs-note").textContent, "Opened in Google Sheets.");
+});
+
+test("results header: a Sheets export the worker refuses says why", () => {
+  const error = "Sign in to export to Google Sheets. CSV and Excel work without signing in.";
+  const page = loadContent({ onMessage: (m) => (m.type === "sheetsExport" ? { ok: false, error } : undefined) });
+  page.result(posts);
+  page.document.querySelector(".igs-menu").querySelectorAll(".igs-menu-item")[3].click();
+  const note = page.document.querySelector(".igs-note");
+  assert.equal(note.textContent, error);
+  assert.ok(note.classList.contains("is-bad"));
+});
+
+
+// ---- Transcription on the page: the pill, then the result card ----
+
+const HINDI = {
+  text: "Namaste doston, aaj hum baat karenge",
+  original: "नमस्ते दोस्तों, आज हम बात करेंगे",
+  language: "hi",
+  romanised: true
+};
+const ENGLISH = { text: "Hello everyone", original: null, language: "en", romanised: false };
+// Every download so far: the anchors content.js clicked (kept, since the
+// cleanup timer is held).
+const downloads = (page) => page.document.querySelectorAll("a").filter((a) => a.download);
+// A page whose worker holds every transcription until the test answers it.
+const holding = (opts) => loadContent(Object.assign({ onMessage: () => undefined }, opts));
+const step = (page) => page.$("ig-sorter-tx-progress").querySelector(".igs-tx-step").textContent;
+const sortedGrid = (page) => page.document.querySelector(".igs-grid");
+
+test("transcribing: the sort's pill and dimmed grid, with the worker's current step", () => {
+  const page = holding();
+  page.result(posts);
+  const btn = page.document.querySelector(".igs-tx");
+  btn.click();
+
+  const pill = page.$("ig-sorter-tx-progress");
+  assert.ok(pill, "pill up");
+  assert.ok(pill.classList.contains("igs-pill"), "the sort's pill");
+  assert.ok(pill.hasAttribute("data-sortcut"));
+  assert.equal(step(page), "Transcribing…");
+  assert.ok(pill.querySelector(".igs-bar").classList.contains("is-open"), "a thin moving bar");
+  assert.equal(sortedGrid(page).getAttribute("data-ig-sorter-dim"), "1", "the grid dims behind it");
+  assert.ok(btn.classList.contains("is-busy"));
+
+  for (const label of ["Downloading reel…", "Uploading…", "Waiting in queue…", "Transcribing…"]) {
+    page.popup({ type: "transcribeProgress", code: "R1", label });
+    assert.equal(step(page), label);
+    assert.equal(btn.getAttribute("aria-label"), label);
+  }
+  assert.equal(page.document.querySelectorAll("#ig-sorter-tx-progress").length, 1, "one pill");
+});
+
+test("transcribing: no Keep browsing; the pill stays until the last job ends", () => {
+  const page = holding();
+  page.result(posts);
+  const [first, second] = page.document.querySelectorAll(".igs-tx");
+  first.click();
+  const pill = page.$("ig-sorter-tx-progress");
+  assert.equal(pill.querySelectorAll("button").length, 0, "no way to wave it off");
+  assert.doesNotMatch(pill.textContent, /Keep browsing/);
+
+  second.click();
+  assert.match(pill.textContent, /· 2 reels/);
+  page.answer("transcribe", { ok: true, result: ENGLISH }); // R1
+  assert.ok(page.$("ig-sorter-tx-progress"), "R2 still running");
+  assert.equal(sortedGrid(page).getAttribute("data-ig-sorter-dim"), "1");
+  assert.ok(first.classList.contains("is-done"));
+  assert.ok(second.classList.contains("is-busy"));
+
+  page.answer("transcribe", { ok: true, result: ENGLISH }); // R2
+  assert.equal(page.$("ig-sorter-tx-progress"), null);
+  assert.equal(sortedGrid(page).hasAttribute("data-ig-sorter-dim"), false);
+});
+
+test("transcript ready: a result card, and nothing downloads without a click", () => {
+  const page = holding();
+  page.result(posts);
+  const btn = page.document.querySelector(".igs-tx");
+  btn.click();
+  page.answer("transcribe", { ok: true, result: HINDI });
+
+  assert.equal(downloads(page).length, 0, "no automatic download");
+  assert.equal(page.$("ig-sorter-tx-progress"), null, "the pill goes");
+  assert.equal(sortedGrid(page).hasAttribute("data-ig-sorter-dim"), false);
+
+  const card = page.document.querySelector(".igs-result");
+  assert.ok(card, "card shown");
+  assert.ok(!card.classList.contains("is-bad"));
+  assert.equal(card.getAttribute("role"), "dialog");
+  assert.equal(card.querySelector("h2").textContent, "Transcript");
+  assert.equal(card.querySelector(".igs-result-sub").textContent, "R1 · Hindi → Hinglish");
+  const panes = card.querySelector(".igs-tx-panes");
+  const [main, original] = panes.querySelectorAll(".igs-tx-pane");
+  assert.equal(main.querySelector(".igs-tx-text").textContent, HINDI.text);
+  assert.equal(main.hidden, false);
+  assert.equal(original.querySelector(".igs-tx-text").textContent, HINDI.original);
+  assert.equal(original.hidden, true, "the original script waits for its toggle");
+  assert.ok(!panes.classList.contains("is-split"));
+  assert.ok(!card.classList.contains("is-wide"));
+
+  // Shown beside the transcript, not under it: two columns, a wider card.
+  const toggle = card.querySelector(".igs-link");
+  assert.equal(toggle.textContent, "Show original script");
+  toggle.click();
+  assert.equal(original.hidden, false);
+  assert.ok(panes.classList.contains("is-split"), "side by side");
+  assert.ok(card.classList.contains("is-wide"));
+  assert.deepEqual(panes.querySelectorAll(".igs-pane-label").map((l) => l.textContent), ["Hinglish", "Original script"]);
+  assert.equal(toggle.textContent, "Hide original script");
+  toggle.click();
+  assert.equal(original.hidden, true);
+  assert.ok(!panes.classList.contains("is-split"));
+  assert.ok(!card.classList.contains("is-wide"));
+  assert.equal(downloads(page).length, 0, "still nothing downloaded");
+  assert.equal(page.store.transcribeStatus.ok, true);
+  assert.equal(page.store.transcribeStatus.text, "Transcript ready (Hindi → Hinglish).");
+
+  // Closing without downloading downloads nothing.
+  card.querySelector(".igs-x").click();
+  assert.equal(page.document.querySelector(".igs-result"), null);
+  assert.equal(downloads(page).length, 0);
+});
+
+test("transcript ready: Download .txt saves the same file as before", () => {
+  const page = holding();
+  page.result(posts);
+  page.document.querySelector(".igs-tx").click();
+  page.answer("transcribe", { ok: true, result: HINDI });
+
+  const buttons = page.document.querySelector(".igs-result-actions").querySelectorAll("button");
+  assert.deepEqual(buttons.map((b) => b.textContent), ["Copy text", "Download .txt"]);
+  buttons[1].click();
+  assert.equal(downloads(page).length, 1);
+  const f = page.lastFile();
+  assert.equal(f.name, "demo-R1.txt");
+  assert.equal(f.type, "text/plain");
+  const lines = f.data.split("\n");
+  assert.deepEqual(lines.slice(0, 4), [
+    "Instagram transcript",
+    "URL:       https://www.instagram.com/p/R1/",
+    "Posted:    2026-10-01T00:00:00Z",
+    "Language:  hi (romanised to Latin script)"
+  ]);
+  assert.match(lines[4], /^Generated: \d{4}-\d\d-\d\dT[\d:.]+Z$/);
+  assert.deepEqual(lines.slice(5), [
+    "", HINDI.text, "", "--- original script ---", "", HINDI.original, ""
+  ]);
+  assert.ok(page.document.querySelector(".igs-result"), "the card stays open");
+});
+
+test("transcript ready: Copy text copies the transcript and says Copied ✓ for 2 seconds", async () => {
+  const copied = [];
+  const page = holding({
+    window: { navigator: { clipboard: { writeText: (t) => (copied.push(t), Promise.resolve()) } } }
+  });
+  page.result(posts);
+  page.document.querySelector(".igs-tx").click();
+  page.answer("transcribe", { ok: true, result: HINDI });
+
+  const copy = page.document.querySelector(".igs-result-actions").querySelector(".igs-primary");
+  copy.click();
+  await settle();
+  assert.deepEqual(copied, [HINDI.text], "the main transcript, not the original");
+  assert.equal(copy.textContent, "Copied ✓");
+  page.fireTimers(2000);
+  assert.equal(copy.textContent, "Copy text");
+  assert.equal(downloads(page).length, 0);
+});
+
+test("transcript ready: no original, no toggle; the language alone when not romanised", () => {
+  const page = holding();
+  page.result(posts);
+  page.document.querySelector(".igs-tx").click();
+  page.answer("transcribe", { ok: true, result: ENGLISH });
+  const card = page.document.querySelector(".igs-result");
+  assert.equal(card.querySelector(".igs-result-sub").textContent, "R1 · English");
+  assert.equal(card.querySelector(".igs-link"), null);
+  assert.equal(card.querySelectorAll(".igs-tx-text").length, 1);
+});
+
+test("result card: Escape closes it", () => {
+  const page = holding();
+  page.result(posts);
+  const btn = page.document.querySelector(".igs-tx");
+  btn.click();
+  page.answer("transcribe", { ok: true, result: ENGLISH });
+  assert.ok(page.document.querySelector(".igs-result"));
+  page.document.dispatchEvent({ type: "keydown", key: "Escape" });
+  assert.equal(page.document.querySelector(".igs-result"), null);
+  assert.equal(page.document.activeElement, btn, "focus back on the reel's button");
+});
+
+test("several transcriptions: each opens its own card when it finishes, one at a time", () => {
+  const page = holding();
+  page.result(posts);
+  const [a, b, c] = page.document.querySelectorAll(".igs-tx");
+  a.click();
+  b.click();
+  c.click();
+  assert.match(page.$("ig-sorter-tx-progress").textContent, /· 3 reels/);
+
+  page.answer("transcribe", { ok: true, result: ENGLISH }); // R1
+  page.answer("transcribe", { ok: false, error: "No speech was detected in this reel. No credit was used." }); // R2
+  assert.match(page.$("ig-sorter-tx-progress").textContent, /^Transcribing…/, "R3 still running");
+  const cards = () => page.document.querySelectorAll(".igs-result");
+  assert.equal(cards().length, 1, "one card at a time");
+  assert.equal(cards()[0].querySelector(".igs-result-sub").textContent, "R1 · English");
+
+  page.answer("transcribe", { ok: true, result: HINDI }); // R3
+  assert.equal(page.$("ig-sorter-tx-progress"), null);
+
+  cards()[0].querySelector(".igs-x").click();
+  assert.equal(cards().length, 1);
+  assert.ok(cards()[0].classList.contains("is-bad"), "then R2's failure");
+  assert.match(cards()[0].textContent, /No speech was detected/);
+
+  page.document.dispatchEvent({ type: "keydown", key: "Escape" });
+  assert.equal(cards()[0].querySelector(".igs-result-sub").textContent, "R3 · Hindi → Hinglish");
+  cards()[0].querySelector(".igs-x").click();
+  assert.equal(cards().length, 0);
+  assert.equal(downloads(page).length, 0, "and none of them downloaded anything");
+});
+
+// ---- Similar accounts (Pro) ----
+
+const DIRECTORY = {
+  version: 3,
+  niches: [
+    { name: "Fitness", count: 4, filters: [{ name: "Yoga", count: 2 }, { name: "Strength", count: 2 }] },
+    { name: "Food", count: 2, filters: [{ name: "Vegan", count: 2 }] }
+  ],
+  accounts: [
+    { niche: "Fitness", username: "zoe.lifts", fullName: "Zoe Park", filter: "Strength", topics: "powerlifting, form tips" },
+    // The profile the test page is on (/demo/reels/).
+    { niche: "Fitness", username: "Demo", fullName: "Demo Self", filter: "Yoga", topics: "stretching" },
+    { niche: "Fitness", username: "amy_yoga", fullName: "Amy Lee", filter: "Yoga", topics: "morning flows" },
+    { niche: "Fitness", username: "Bob.Strong", fullName: "", filter: "Strength", topics: "deadlifts" },
+    { niche: "Food", username: "vegchef", fullName: "Veg Chef", filter: "Vegan", topics: "meal prep" },
+    { niche: "Food", username: "plantplate", fullName: "Plant Plate", filter: "Vegan", topics: "yoga snacks" }
+  ]
+};
+
+// A Pro page with a sorted grid. The panel's directory request is held for
+// the test to answer unless opts.directory gives the reply.
+function proPage(opts) {
+  opts = opts || {};
+  const page = loadContent(Object.assign({
+    pro: true,
+    onMessage: (msg) => (msg.type === "directory" ? opts.directory : undefined)
+  }, opts));
+  page.result(posts);
+  return page;
+}
+
+function openPanel(page) {
+  page.document.querySelector(".igs-similar").click();
+  return panel(page);
+}
+
+// The panel's closed shadow root, or null when it's not open.
+function panel(page) {
+  const host = page.$("ig-sorter-similar");
+  return host ? host._shadowRoot : null;
+}
+
+const listed = (root) => root.querySelectorAll(".user").map((n) => n.textContent);
+const chipsOf = (root) =>
+  root.querySelectorAll(".chip").map((c) => [c.textContent, c.getAttribute("aria-pressed")]);
+const typeInto = (input, value) => {
+  input.value = value;
+  input.dispatchEvent({ type: "input" });
+};
+const choose = (select, value) => {
+  select.value = value;
+  select.dispatchEvent({ type: "change" });
+};
+
+test("similar accounts: no button on Free or signed out; the worker's word decides", () => {
+  const free = loadContent();
+  free.result(posts);
+  assert.equal(free.proAsks.length, 1, "asked once, with the header");
+  assert.equal(free.document.querySelector(".igs-similar"), null);
+
+  const signedOut = loadContent({ proReply: { ok: false, signedOut: true, error: "Your session has ended." } });
+  signedOut.result(posts);
+  assert.equal(signedOut.document.querySelector(".igs-similar"), null);
+
+  const noWorker = loadContent({ proReply: null });
+  noWorker.result(posts);
+  assert.equal(noWorker.document.querySelector(".igs-similar"), null);
+});
+
+test("similar accounts: on Pro, a secondary button with a people icon, left of Restore original", () => {
+  const page = proPage();
+  const actions = page.document.querySelector(".igs-actions");
+  const [first, second] = actions.children;
+  assert.ok(first.classList.contains("igs-similar"));
+  assert.ok(first.classList.contains("igs-ghost"), "secondary, like Restore");
+  assert.equal(first.textContent, "Similar accounts");
+  assert.ok(first.querySelector("svg"), "icon");
+  assert.equal(second.textContent, "Restore original");
+  assert.deepEqual(page.sent.map((m) => m.type), [], "the list isn't fetched until the panel opens");
+});
+
+test("similar accounts: loading skeleton, then this profile's niche, A to Z, without this profile", () => {
+  const page = proPage();
+  const root = openPanel(page);
+  const host = page.$("ig-sorter-similar");
+  assert.ok(host.hasAttribute("data-sortcut"), "the tokens reach in from the host");
+  assert.equal(host.getAttribute("data-theme"), "light");
+  assert.equal(root.mode, "closed");
+  assert.equal(page.document.querySelector(".drawer"), null, "nothing of it in the page's own DOM");
+  assert.equal(root.querySelector(".drawer").getAttribute("role"), "dialog");
+  assert.equal(root.querySelector("h2").textContent, "Similar accounts");
+  assert.ok(root.querySelectorAll(".sk").length > 0, "skeleton while loading");
+  assert.equal(root.querySelector(".controls").hidden, true);
+  assert.deepEqual(page.sent.map((m) => m.type), ["directory"]);
+
+  page.answer("directory", { ok: true, directory: DIRECTORY });
+  assert.equal(root.querySelectorAll(".sk").length, 0);
+  const select = root.querySelector("select");
+  assert.equal(select.value, "Fitness", "the niche of @demo, the profile this page is on");
+  assert.deepEqual(select.querySelectorAll("option").map((o) => o.textContent), ["Fitness (3)", "Food (2)"]);
+  assert.deepEqual(chipsOf(root), [["All3", "true"], ["Yoga1", "false"], ["Strength2", "false"]]);
+  assert.deepEqual(listed(root), ["@amy_yoga", "@Bob.Strong", "@zoe.lifts"]);
+  assert.equal(root.querySelector(".count").textContent, "3 accounts");
+
+  const [amy, bob] = root.querySelectorAll(".card");
+  assert.equal(amy.querySelector(".avatar").textContent, "A", "first letter of the full name");
+  assert.equal(bob.querySelector(".avatar").textContent, "B", "else of the username");
+  assert.equal(amy.querySelector(".name").textContent, "Amy Lee");
+  assert.equal(bob.querySelector(".name"), null, "no empty name line");
+  assert.equal(amy.querySelector(".tag").textContent, "Yoga");
+  assert.equal(amy.querySelector(".topics").textContent, "morning flows");
+  assert.deepEqual(amy.querySelectorAll("button").map((b) => b.textContent), ["Open profile", "Sort reels"]);
+});
+
+test("similar accounts: filter chips, the search, and another niche", () => {
+  const page = proPage({ directory: { ok: true, directory: DIRECTORY } });
+  const root = openPanel(page);
+  const input = root.querySelector("input");
+
+  root.querySelectorAll(".chip")[2].click(); // Strength
+  assert.deepEqual(chipsOf(root).map((c) => c[1]), ["false", "false", "true"]);
+  assert.deepEqual(listed(root), ["@Bob.Strong", "@zoe.lifts"]);
+  assert.equal(root.querySelector(".count").textContent, "2 accounts");
+
+  typeInto(input, "FORM");
+  assert.deepEqual(listed(root), ["@zoe.lifts"], "topics, ignoring case");
+  assert.equal(root.querySelector(".count").textContent, "1 account");
+  typeInto(input, "bob.");
+  assert.deepEqual(listed(root), ["@Bob.Strong"], "username");
+
+  root.querySelectorAll(".chip")[0].click(); // All
+  typeInto(input, "amy lee");
+  assert.deepEqual(listed(root), ["@amy_yoga"], "full name");
+  typeInto(input, "@zoe");
+  assert.deepEqual(listed(root), ["@zoe.lifts"], "a leading @ is ignored");
+  typeInto(input, "demo");
+  assert.deepEqual(listed(root), [], "this profile never shows, even searched for");
+  assert.equal(root.querySelector(".state").textContent, "No accounts match");
+  assert.equal(root.querySelector(".count").textContent, "0 accounts");
+
+  typeInto(input, "");
+  choose(root.querySelector("select"), "Food");
+  assert.deepEqual(chipsOf(root), [["All2", "true"], ["Vegan2", "false"]], "the chip goes back to All");
+  assert.deepEqual(listed(root), ["@plantplate", "@vegchef"]);
+  assert.equal(page.store.similarNiche, "Food", "remembered");
+  typeInto(input, "yoga");
+  assert.deepEqual(listed(root), ["@plantplate"], "only within the niche");
+});
+
+test("similar accounts: elsewhere, the last niche chosen, else the first", () => {
+  const at = (pathname, store) => {
+    const page = proPage({
+      directory: { ok: true, directory: DIRECTORY },
+      store,
+      window: { location: { href: "https://www.instagram.com" + pathname, pathname, reload() {} } }
+    });
+    return openPanel(page).querySelector("select").value;
+  };
+  assert.equal(at("/someone/reels/", { similarNiche: "Food" }), "Food");
+  assert.equal(at("/someone/reels/", {}), "Fitness");
+  assert.equal(at("/someone/reels/", { similarNiche: "Gone" }), "Fitness", "a niche no longer listed");
+  assert.equal(at("/demo/reels/", { similarNiche: "Food" }), "Fitness", "this profile's niche comes first");
+  assert.equal(at("/vegchef/reels/", {}), "Food");
+});
+
+test("similar accounts: each avatar's colour comes from its username, the same every time", () => {
+  const colours = () => {
+    const page = proPage({ directory: { ok: true, directory: DIRECTORY } });
+    return openPanel(page).querySelectorAll(".avatar").map((a) => a.style.getPropertyValue("background"));
+  };
+  const first = colours();
+  assert.deepEqual(colours(), first);
+  first.forEach((c) => assert.match(c, /^#[0-9A-F]{6}$/i));
+});
+
+test("similar accounts: untrusted text stays text, and a username unfit for a link isn't listed", () => {
+  const evil = {
+    version: 1,
+    niches: [{ name: "X", count: 3, filters: [{ name: "Y", count: 3 }] }],
+    accounts: [
+      { niche: "X", username: "ok_user", fullName: "<img src=x onerror=alert(1)>", filter: "Y", topics: "<b>hi</b>" },
+      { niche: "X", username: "../evil", fullName: "Evil", filter: "Y", topics: "" },
+      { niche: "X", username: "a b", fullName: "Space", filter: "Y", topics: "" }
+    ]
+  };
+  const page = proPage({ directory: { ok: true, directory: evil } });
+  const root = openPanel(page);
+  assert.deepEqual(listed(root), ["@ok_user"]);
+  const card = root.querySelector(".card");
+  assert.equal(card.querySelector(".name").textContent, "<img src=x onerror=alert(1)>");
+  assert.equal(card.querySelectorAll("img").length, 0);
+  assert.equal(card.querySelector(".topics").textContent, "<b>hi</b>");
+});
+
+test("similar accounts: Open profile opens a new tab", () => {
+  const page = proPage({ directory: { ok: true, directory: DIRECTORY } });
+  const root = openPanel(page);
+  root.querySelectorAll(".card")[2].querySelectorAll("button")[0].click(); // zoe.lifts
+  assert.deepEqual(page.opened, [["https://www.instagram.com/zoe.lifts/", "_blank", "noopener"]]);
+  assert.equal(page.store.pendingSort, undefined, "no sort for a plain open");
+});
+
+test("similar accounts: Sort reels leaves this page's sort and depth for the new Reels tab, for 60 s", () => {
+  const job = { sortBy: "outlierLikes", limit: 200, maxReels: null, tabId: 7, plan: "pro" };
+  const page = proPage({ job, directory: { ok: true, directory: DIRECTORY } });
+  const root = openPanel(page);
+  const before = Date.now();
+  root.querySelectorAll(".card")[1].querySelectorAll("button")[1].click(); // Bob.Strong
+  const p = page.store.pendingSort;
+  assert.deepEqual(
+    { username: p.username, sortBy: p.sortBy, limit: p.limit, maxReels: p.maxReels },
+    { username: "bob.strong", sortBy: "outlierLikes", limit: 200, maxReels: null }
+  );
+  assert.ok(p.expiresAt >= before + 60000 && p.expiresAt <= Date.now() + 60000, "expires in 60 s");
+  assert.deepEqual(page.opened, [["https://www.instagram.com/Bob.Strong/reels/", "_blank", "noopener"]]);
+});
+
+test("similar accounts: closed by ×, Escape or a click beside it, focus back on the button", () => {
+  const page = proPage({ directory: { ok: true, directory: DIRECTORY } });
+  const btn = page.document.querySelector(".igs-similar");
+
+  openPanel(page).querySelector(".igs-x").click();
+  assert.equal(panel(page), null);
+  assert.equal(page.document.activeElement, btn);
+
+  openPanel(page);
+  page.document.dispatchEvent({ type: "keydown", key: "Escape" });
+  assert.equal(panel(page), null);
+
+  openPanel(page).querySelector(".scrim").click();
+  assert.equal(panel(page), null);
+
+  openPanel(page);
+  page.document.querySelectorAll(".igs-ghost").find((b) => b.textContent === "Restore original").click();
+  assert.equal(panel(page), null, "Restore original closes it too");
+});
+
+test("similar accounts: a failed fetch says so in plain words, and Retry tries again", () => {
+  const page = proPage();
+  const root = openPanel(page);
+  page.answer("directory", { ok: false, error: "Couldn't reach Sortcut. Check your connection and try again." });
+  const state = root.querySelector(".state");
+  assert.ok(state.classList.contains("is-bad"));
+  assert.match(state.textContent, /^Couldn't reach Sortcut\. Check your connection and try again\.Retry$/);
+  assert.equal(root.querySelector(".controls").hidden, true);
+
+  state.querySelector("button").click();
+  assert.ok(root.querySelectorAll(".sk").length > 0, "loading again");
+  assert.deepEqual(page.sent.map((m) => m.type), ["directory", "directory"]);
+  page.answer("directory", { ok: true, directory: DIRECTORY });
+  assert.deepEqual(listed(root), ["@amy_yoga", "@Bob.Strong", "@zoe.lifts"]);
+
+  const noWorker = proPage({ directory: null });
+  assert.match(openPanel(noWorker).querySelector(".state").textContent, /Extension worker unavailable/);
+});
+
+test("similar accounts: not Pro after all (402), the panel closes for the Upgrade dialog", () => {
+  const page = proPage({ directory: { ok: false, needsPro: true, error: "Similar accounts is part of Sortcut Pro." } });
+  openPanel(page);
+  assert.equal(panel(page), null, "closed");
+  const dialog = page.document.querySelector(".igs-dialog");
+  assert.ok(dialog, "the Upgrade dialog");
+  assert.equal(dialog.querySelector("#igs-dialog-text").textContent, "Similar accounts is part of Sortcut Pro.");
+  assert.equal(dialog.querySelector(".igs-btn").textContent, "Upgrade to Pro");
+  assert.equal(page.document.querySelector(".igs-similar"), null, "and the button goes");
+  dialog.querySelector(".igs-btn").click();
+  assert.deepEqual(page.opened, [[PRICING, "_blank", "noopener"]]);
+});
+
+// ---- The pending sort, in the tab Sort reels opened ----
+
+function reelsTab(pathname, pendingSort) {
+  let reloads = 0;
+  const page = loadContent({
+    store: pendingSort === undefined ? {} : { pendingSort },
+    window: {
+      location: { href: "https://www.instagram.com" + pathname, pathname, reload() { reloads++; } }
+    }
+  });
+  page.reloads = () => reloads;
+  return page;
+}
+
+const pending = (extra) =>
+  Object.assign({ username: "zoe.lifts", sortBy: "likes", limit: 50, maxReels: null, expiresAt: Date.now() + 30000 }, extra);
+
+test("pending sort: the right profile's Reels tab starts it, once", () => {
+  const page = reelsTab("/Zoe.Lifts/reels/", pending());
+  assert.equal(page.reloads(), 1, "reloaded to arm the interceptor, as a popup sort does");
+  assert.deepEqual(page.job(), { sortBy: "likes", limit: 50, maxReels: null, tabId: 7, plan: "pro" });
+  assert.equal(page.store.pendingSort, undefined, "used up");
+  assert.equal(page.store.sortState.status, "running");
+
+  const again = reelsTab("/zoe.lifts/reels/", page.store.pendingSort);
+  assert.equal(again.reloads(), 0, "a second load finds nothing to start");
+  assert.equal(again.job(), null);
+});
+
+test("pending sort: another profile, or not the Reels tab, leaves it for its own tab", () => {
+  for (const path of ["/someone/reels/", "/zoe.lifts/", "/zoe.lifts/reel/ABC/", "/zoe.lifts.x/reels/"]) {
+    const p = pending();
+    const page = reelsTab(path, p);
+    assert.equal(page.reloads(), 0, path);
+    assert.equal(page.job(), null, path);
+    assert.deepEqual(page.store.pendingSort, p, path + " keeps it");
+  }
+});
+
+test("pending sort: expires after 60 s; one set further ahead than that counts as expired", () => {
+  for (const expiresAt of [Date.now() - 1, Date.now() + 120000, "soon", undefined]) {
+    const page = reelsTab("/zoe.lifts/reels/", pending({ expiresAt }));
+    assert.equal(page.reloads(), 0, String(expiresAt));
+    assert.equal(page.job(), null);
+    assert.equal(page.store.pendingSort, undefined, "dropped");
+  }
+});
+
+test("pending sort: an unknown sort or depth is dropped, never run", () => {
+  for (const bad of [{ sortBy: "followers" }, { limit: 0 }, { limit: "lots" }]) {
+    const page = reelsTab("/zoe.lifts/reels/", pending(bad));
+    assert.equal(page.reloads(), 0, JSON.stringify(bad));
+    assert.equal(page.store.pendingSort, undefined);
+  }
+});
+
+test("pending sort: a load that is already a sort's reload doesn't take one", () => {
+  let reloads = 0;
+  const page = loadContent({
+    store: { pendingSort: pending({ username: "demo" }) },
+    job: { sortBy: "views", limit: 100, maxReels: null, tabId: 7, plan: "pro" },
+    window: { location: { href: "https://www.instagram.com/demo/reels/", pathname: "/demo/reels/", reload() { reloads++; } } }
+  });
+  assert.equal(reloads, 0);
+  assert.equal(page.job().sortBy, "views");
+  assert.ok(page.store.pendingSort, "left alone");
 });

@@ -113,27 +113,33 @@ another profile (opening a post or reel over the profile doesn't count).
 
 ## Transcribe
 
-Every video tile in the sorted grid carries a **Transcribe** button. It
-downloads that reel's audio, transcribes it, and saves a `.txt` next to your
-other exports.
+Every video tile in the sorted grid carries a **Transcribe** button. While it
+runs, the grid dims behind a progress pill showing the current step
+(Downloading reel…, Uploading…, Transcribing…, or Waiting in queue…) until it
+finishes. When it's ready, the transcript opens in a card on the page, with
+the reel code and detected language, **Copy text** and **Download .txt**.
+Nothing is downloaded until you click Download. Several transcriptions can run
+at once; each opens its own card when it finishes, one at a time.
 
 Hindi comes back as **Hinglish** — Latin script, the way people actually type
-it — with the original Devanagari kept at the bottom of the file. English reels
-come back as-is. Language is detected automatically; you don't pick one.
+it — with the original Devanagari behind a **Show original script** toggle on
+the card (it opens beside the transcript) and at the bottom of the `.txt`. English reels come back as-is.
+Language is detected automatically; you don't pick one.
 
 Transcription is a **Sortcut Pro** feature and runs through Sortcut. Sign in
-with Google under **Account** in the popup, or just click Transcribe: signed
+with Google from **Sign in** at the bottom right of the popup, or just click Transcribe: signed
 out, a "Sign in to transcribe" dialog opens on the page, and its **Sign in with
 Google** button opens Google. Once you're signed in, that reel's transcription
 carries on by itself on Pro; on Free an Upgrade dialog opens instead. Sign-in asks Google only for your name and
-email address. The popup then shows your plan and, on Pro, how many transcripts
-you've used and when they reset (200 a month on Pro Monthly, 3,000 a year on Pro
+email address. The popup then shows your plan top right and, under your avatar
+at the bottom right, your email and, on Pro, how many transcripts you've used
+and when they reset (200 a month on Pro Monthly, 3,000 a year on Pro
 Yearly). Free accounts can sort and export but not transcribe; plans are at
 [sortcut.co/pricing](https://sortcut.co/pricing.html). A reel you've recently
 transcribed comes back instantly without using another transcript.
 
-When a transcription fails, the reason appears on a card over that reel,
-which stays until you dismiss it, and the same words appear in the popup for
+When a transcription fails, the reason appears in a red-tinted card on the
+page, which stays until you close it, and the same words appear in the popup for
 30 minutes. The service-worker console (`chrome://extensions` → Sortcut →
 **service worker**) logs each failure as `[GridSorter] transcription failed`,
 with the reel's code and any detail too technical for the card.

@@ -180,99 +180,190 @@
     return (x >= 10 ? Math.round(x) : x.toFixed(1)) + "x";
   }
 
-  // Hover states can't be expressed in inline styles, so the tile button is the
-  // one thing here that needs a real stylesheet. Everything is prefixed and
-  // scoped under .igs-tile so nothing can bleed into Instagram's own UI.
+  // Everything on the page is ours only by prefix: the igs- classes, under
+  // elements marked data-sortcut, which is where the shared tokens
+  // (lib/tokens.css, injected by the manifest) apply. Every rule sets what it
+  // relies on, so Instagram's element styles can't reach in, and nothing here
+  // matches an element of Instagram's except the one attribute that dims its
+  // grid during a sort. (Not a shadow root: the tests and the popup reach
+  // these elements through the page's own DOM.)
   var STYLE_ID = "ig-sorter-style";
-  var SANS = "-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif";
-  var MONO = "ui-monospace,SFMono-Regular,Menlo,monospace";
   var CSS = [
+    "[data-sortcut],[data-sortcut] *{box-sizing:border-box;}",
+    "[data-sortcut]{font-family:var(--font);-webkit-font-smoothing:antialiased;}",
+    "[data-sortcut] button{font-family:var(--font);text-transform:none;letter-spacing:normal;}",
+    ".igs-logo{display:block;flex:none;width:24px;height:24px;margin:0;border:0;}",
+
+    // ---- While a sort runs: Instagram's grid softly dimmed, and the pill ----
+    "[data-ig-sorter-dim]{opacity:.38 !important;filter:blur(2px) saturate(.7) !important;",
+    "transition:opacity .3s ease,filter .3s ease;}",
+    ".igs-pill{position:fixed;top:18px;left:50%;z-index:2147483646;transform:translateX(-50%);",
+    "display:flex;align-items:center;gap:12px;width:max-content;max-width:calc(100vw - 32px);",
+    "margin:0;padding:10px 18px 10px 12px;border:1px solid var(--line);border-radius:var(--r-pill);",
+    "background:var(--bg);color:var(--ink);box-shadow:var(--shadow-float);",
+    "font:500 13px/1.3 var(--font);animation:igs-in .25s ease both;}",
+    ".igs-pill .igs-logo{width:28px;height:28px;}",
+    ".igs-pill-body{display:flex;flex-direction:column;gap:7px;min-width:220px;}",
+    ".igs-pill-text{margin:0;color:var(--gray);white-space:nowrap;}",
+    ".igs-pill-text b{color:var(--ink);font-weight:650;}",
+    ".igs-bar{position:relative;height:4px;overflow:hidden;border-radius:var(--r-pill);background:var(--line);}",
+    ".igs-bar i{position:absolute;top:0;bottom:0;left:0;display:block;width:0;",
+    "border-radius:inherit;background:var(--ig-btn);transition:width .4s ease;}",
+    // "All reels" has no target: a band that keeps moving instead.
+    ".igs-bar.is-open i{width:35%;animation:igs-slide 1.3s ease-in-out infinite;}",
+    "@keyframes igs-slide{from{left:-35%;}to{left:100%;}}",
+    "@keyframes igs-in{from{opacity:0;transform:translate(-50%,-6px);}to{opacity:1;transform:translate(-50%,0);}}",
+
+    // ---- The sorted view: a header card above the grid ----
+    ".igs-wrap{display:block;width:100%;margin:0 0 28px;padding:0;color:var(--ink);text-align:left;}",
+    ".igs-head{display:flex;align-items:center;gap:14px;margin:0 0 14px;padding:14px 14px 14px 16px;",
+    "border:1px solid var(--line);border-radius:var(--r-card);background:var(--bg);box-shadow:var(--shadow-card);}",
+    ".igs-head .igs-logo{width:36px;height:36px;}",
+    ".igs-head-text{flex:1;min-width:0;}",
+    ".igs-title{margin:0;padding:0;border:0;color:var(--ink);font:700 16px/1.25 var(--font);letter-spacing:-.02em;}",
+    ".igs-sub{margin:2px 0 0;padding:0;color:var(--gray);font:400 13px/1.4 var(--font);}",
+    ".igs-note{margin:4px 0 0;padding:0;color:var(--ink-2);font:500 12px/1.4 var(--font);}",
+    ".igs-note.is-bad{color:var(--bad);}",
+    ".igs-actions{display:flex;align-items:center;gap:8px;flex:none;}",
+    ".igs-primary,.igs-ghost{display:inline-flex;align-items:center;gap:6px;height:36px;margin:0;",
+    "padding:0 16px;border:0;border-radius:var(--r-pill);cursor:pointer;white-space:nowrap;",
+    "font:600 13px/1 var(--font);transition:filter .12s ease,background .12s ease;}",
+    ".igs-primary{background:var(--ig-btn);color:#fff;box-shadow:var(--shadow-btn);}",
+    ".igs-primary:hover{filter:brightness(1.06);}",
+    ".igs-ghost{background:var(--bg-2);color:var(--ink);}",
+    ".igs-ghost:hover{background:var(--line);}",
+    ".igs-primary svg,.igs-ghost svg{display:block;flex:none;}",
+    ".igs-menu-wrap{position:relative;}",
+    ".igs-menu{position:absolute;top:calc(100% + 6px);right:0;z-index:10;min-width:190px;margin:0;padding:6px;",
+    "border:1px solid var(--line);border-radius:14px;background:var(--bg);box-shadow:var(--shadow-float);}",
+    ".igs-menu[hidden]{display:none;}",
+    ".igs-menu-item{display:flex;align-items:center;gap:10px;width:100%;height:36px;margin:0;padding:0 10px;",
+    "border:0;border-radius:var(--r-input);background:transparent;color:var(--ink);cursor:pointer;",
+    "text-align:left;font:500 13px/1 var(--font);}",
+    ".igs-menu-item:hover,.igs-menu-item:focus-visible{background:var(--bg-2);outline:none;}",
+    ".igs-menu-item svg{color:var(--gray);}",
+
+    // ---- Tiles ----
+    ".igs-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;width:100%;margin:0;padding:0;}",
+    // The tile's cell.
+    ".igs-cell{position:relative;min-width:0;border-radius:12px;}",
+    // #1: a thin ring in the Instagram gradient.
+    ".igs-top::before{content:\"\";position:absolute;inset:-3px;border-radius:15px;background:var(--ig);}",
     // content-visibility lets the browser skip layout and paint for tiles that
     // are scrolled out of view. An all-posts run puts hundreds of tiles in the
     // DOM at once, and without this every one of them is painted on every
     // frame. The intrinsic size keeps the scrollbar from jumping as skipped
     // tiles are realised.
-    ".igs-tile{position:relative;content-visibility:auto;",
-    "contain-intrinsic-size:auto 220px;}",
+    ".igs-tile{position:relative;display:block;aspect-ratio:3/4;overflow:hidden;margin:0;padding:0;",
+    "border-radius:12px;background:var(--bg-2);text-decoration:none;color:#fff;",
+    "content-visibility:auto;contain-intrinsic-size:auto 300px;}",
+    ".igs-top .igs-tile{z-index:1;}",
+    ".igs-tile img{display:block;width:100%;height:100%;max-width:none;margin:0;object-fit:cover;",
+    "transition:transform .25s ease;}",
+    ".igs-tile:hover img{transform:scale(1.03);}",
+    ".igs-badge{position:absolute;top:8px;z-index:2;display:flex;align-items:center;height:22px;",
+    "margin:0;padding:0 8px;border-radius:var(--r-pill);color:#fff;",
+    "font:700 11.5px/1 var(--font);font-variant-numeric:tabular-nums;}",
+    ".igs-rank{left:8px;min-width:22px;justify-content:center;background:var(--scrim);}",
+    ".igs-rank.is-filler{color:rgba(255,255,255,.6);}",
+    ".igs-score{right:8px;background:var(--ig-btn);box-shadow:0 2px 8px rgba(0,0,0,.25);}",
+    ".igs-meta{position:absolute;left:0;right:0;bottom:0;z-index:1;display:flex;flex-wrap:wrap;",
+    "align-items:center;gap:4px 10px;margin:0;padding:28px 10px 9px;",
+    "background:linear-gradient(transparent,rgba(12,11,16,.82));color:#fff;",
+    "font:600 12px/1 var(--font);font-variant-numeric:tabular-nums;}",
+    ".igs-meta.has-tx{padding-right:46px;}",
+    ".igs-stat{display:inline-flex;align-items:center;gap:4px;opacity:.78;}",
+    ".igs-stat.is-main{opacity:1;font-size:13px;font-weight:700;}",
+    ".igs-stat svg{display:block;flex:none;}",
 
-    ".igs-tx{position:absolute;bottom:6px;right:6px;z-index:3;",
-    "width:28px;height:28px;padding:0;margin:0;border:0;border-radius:8px;",
-    "display:flex;align-items:center;justify-content:center;cursor:pointer;",
-    "background:rgba(23,21,28,.7);color:#EFECF4;opacity:.5;",
-    "transition:opacity .15s ease,background .15s ease,transform .12s ease;}",
-
-    // Visible at rest so it can be discovered without hovering, but held back
-    // far enough that 100 tiles don't read as 100 buttons.
-    //
-    // The blur lives ONLY here, on hover, and never on the resting button.
-    // backdrop-filter forces a compositing layer and re-samples what is behind
-    // it every frame; opacity:.5 does not switch that off. On the resting rule
-    // it meant one live blur per video tile, which is hundreds of them during
-    // an all-posts scroll. Scoped to :hover there is at most one.
-    ".igs-tile:hover .igs-tx:not(.is-busy):not(.is-done):not(.is-error)",
-    "{opacity:1;background:rgba(23,21,28,.92);",
-    "-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);}",
-    ".igs-tx:not(.is-busy):not(.is-done):not(.is-error):hover",
-    "{opacity:1;background:#E8A33D;color:#17151C;transform:scale(1.09);}",
-
-    // Keyboard users get the same affordance as the mouse, without a hover.
-    ".igs-tx:focus-visible{opacity:1;outline:2px solid #E8A33D;outline-offset:2px;}",
-
-    ".igs-tx.is-busy{opacity:1;background:rgba(23,21,28,.92);cursor:progress;}",
-    ".igs-tx.is-done{opacity:1;background:#3A7D4E;color:#fff;}",
-    ".igs-tx.is-error{opacity:1;background:#8F3A3A;color:#fff;}",
-
+    // Transcribe: shown on hover (and keyboard focus), so 100 tiles don't
+    // read as 100 buttons. No backdrop blur anywhere on a tile: it forces a
+    // compositing layer per tile, hundreds of them during an all-posts run.
+    ".igs-tx{position:absolute;bottom:8px;right:8px;z-index:3;width:30px;height:30px;padding:0;margin:0;",
+    "border:0;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;",
+    "background:rgba(255,255,255,.94);color:#0C0B10;opacity:0;transform:scale(.9);",
+    "box-shadow:0 2px 8px rgba(0,0,0,.25);",
+    "transition:opacity .15s ease,transform .12s ease,background .15s ease,color .15s ease;}",
+    ".igs-tile:hover .igs-tx,.igs-tx:focus-visible{opacity:1;transform:none;}",
+    ".igs-tx:not(.is-busy):not(.is-done):not(.is-error):hover{background:var(--ig-btn);color:#fff;transform:scale(1.08);}",
+    ".igs-tx:focus-visible{outline:3px solid var(--focus);outline-offset:2px;}",
+    ".igs-tx.is-busy{opacity:1;transform:none;cursor:progress;}",
+    ".igs-tx.is-done{opacity:1;transform:none;background:var(--ig-btn);color:#fff;}",
+    ".igs-tx.is-error{opacity:1;transform:none;background:#C42B4B;color:#fff;}",
     ".igs-tx.is-busy svg{animation:igs-spin .8s linear infinite;}",
     "@keyframes igs-spin{to{transform:rotate(360deg);}}",
-    "@media (prefers-reduced-motion:reduce){",
-    ".igs-tx.is-busy svg{animation:none;}.igs-tx{transition:none;}}",
 
-    // The tile's cell. The failure card sits here, beside the tile's <a>
-    // rather than inside it, so clicking the card can't open the post.
-    ".igs-cell{position:relative;min-width:0;}",
+    // Shared close button: the dialogs and the result cards.
+    ".igs-x{position:absolute;top:12px;right:12px;width:30px;height:30px;",
+    "margin:0;padding:0;border:0;border-radius:50%;background:transparent;",
+    "color:var(--gray);display:flex;align-items:center;justify-content:center;",
+    "font:400 20px/1 var(--font);cursor:pointer;}",
+    ".igs-x:hover{background:var(--bg-2);color:var(--ink);}",
+    "[data-sortcut] :focus-visible{outline:3px solid var(--focus);outline-offset:2px;}",
 
-    // Shared close button: the failure card and the dialogs.
-    ".igs-x{position:absolute;top:10px;right:10px;width:28px;height:28px;",
-    "margin:0;padding:0;border:0;border-radius:7px;background:transparent;",
-    "color:#918AA0;display:flex;align-items:center;justify-content:center;",
-    "font:400 20px/1 " + SANS + ";cursor:pointer;}",
-    ".igs-x:hover{background:#221E29;color:#EFECF4;}",
-    ".igs-x:focus-visible,.igs-btn:focus-visible{outline:2px solid #E8A33D;outline-offset:2px;}",
-
-    // Failure card: over the bottom of the reel it belongs to, until dismissed.
-    ".igs-card{position:absolute;left:6px;right:6px;bottom:6px;z-index:4;",
-    "box-sizing:border-box;max-height:calc(100% - 12px);overflow:auto;margin:0;",
-    "padding:8px 28px 9px 10px;border:1px solid rgba(240,138,122,.42);border-radius:8px;",
-    "background:#17151C;color:#EFECF4;box-shadow:0 6px 18px rgba(0,0,0,.35);",
-    "font:500 11.5px/1.4 " + SANS + ";text-align:left;cursor:default;}",
-    ".igs-card-title{display:block;margin:0 0 3px;color:#F08A7A;",
-    "font:700 10px/1.2 " + MONO + ";letter-spacing:.06em;text-transform:uppercase;}",
-    ".igs-card .igs-x{top:3px;right:3px;width:22px;height:22px;font-size:16px;}",
-
-    // Sign-in and Upgrade dialogs. The palette and the three-bar mark are the popup's.
-    ".igs-modal{position:fixed;inset:0;z-index:2147483647;box-sizing:border-box;",
+    // Sign-in and Upgrade dialogs.
+    ".igs-modal{position:fixed;inset:0;z-index:2147483647;",
     "display:flex;align-items:center;justify-content:center;padding:16px;",
-    "background:rgba(10,9,13,.55);}",
-    ".igs-dialog{position:relative;box-sizing:border-box;width:100%;max-width:340px;",
-    "margin:0;padding:20px 18px 18px;border:1px solid #322C3D;border-radius:12px;",
-    "background:#17151C;color:#EFECF4;box-shadow:0 18px 48px rgba(0,0,0,.45);",
-    "font:400 13px/1.45 " + SANS + ";text-align:left;}",
-    ".igs-dialog-head{display:flex;align-items:center;gap:10px;margin:0 30px 8px 0;}",
-    ".igs-marks{flex:none;display:flex;align-items:flex-end;gap:3px;height:16px;}",
-    ".igs-marks i{display:block;width:4px;border-radius:2px;background:#E8A33D;}",
-    ".igs-marks i:nth-child(1){height:16px;}",
-    ".igs-marks i:nth-child(2){height:11px;opacity:.72;}",
-    ".igs-marks i:nth-child(3){height:7px;opacity:.46;}",
-    ".igs-dialog h2{margin:0;padding:0;color:#EFECF4;",
-    "font:700 15px/1.25 " + SANS + ";letter-spacing:-.02em;}",
-    ".igs-dialog p{margin:0 0 14px;padding:0;color:#C9C4D3;font:400 13px/1.45 " + SANS + ";}",
-    ".igs-dialog p.igs-dialog-err{margin:-4px 0 12px;color:#F08A7A;",
-    "font:500 11.5px/1.45 " + MONO + ";}",
-    ".igs-btn{display:block;box-sizing:border-box;width:100%;margin:0;padding:11px;",
-    "border:0;border-radius:8px;background:#E8A33D;color:#17151C;cursor:pointer;",
-    "font:700 13px/1 " + SANS + ";letter-spacing:-.01em;}",
-    ".igs-btn:hover{filter:brightness(1.07);}",
-    ".igs-btn:disabled{opacity:.6;cursor:progress;filter:none;}"
+    "background:rgba(12,11,16,.45);animation:igs-fade .2s ease both;}",
+    ".igs-dialog{position:relative;width:100%;max-width:360px;",
+    "margin:0;padding:22px 22px 20px;border:1px solid var(--line);border-radius:var(--r-card);",
+    "background:var(--bg);color:var(--ink);box-shadow:var(--shadow-float);",
+    "font:400 14px/1.45 var(--font);text-align:left;}",
+    ".igs-dialog-head{display:flex;align-items:center;gap:10px;margin:0 34px 10px 0;}",
+    ".igs-dialog-head .igs-logo{width:30px;height:30px;}",
+    ".igs-dialog h2{margin:0;padding:0;border:0;color:var(--ink);",
+    "font:700 17px/1.25 var(--font);letter-spacing:-.02em;}",
+    ".igs-dialog p{margin:0 0 16px;padding:0;color:var(--ink-2);font:400 14px/1.45 var(--font);}",
+    ".igs-dialog p.igs-dialog-err{margin:-6px 0 14px;padding:9px 12px;border:1px solid var(--bad-line);",
+    "border-radius:var(--r-input);background:var(--bad-bg);color:var(--bad);font:500 12.5px/1.45 var(--font);}",
+    ".igs-dialog p.igs-dialog-err[hidden]{display:none;}",
+    ".igs-btn{display:block;width:100%;height:44px;margin:0;padding:0 16px;",
+    "border:0;border-radius:var(--r-pill);background:var(--ig-btn);color:#fff;cursor:pointer;",
+    "box-shadow:var(--shadow-btn);font:650 14px/1 var(--font);letter-spacing:-.01em;}",
+    ".igs-btn:hover{filter:brightness(1.06);}",
+    ".igs-btn:disabled{opacity:.6;cursor:progress;filter:none;}",
+    "@keyframes igs-fade{from{opacity:0;}to{opacity:1;}}",
+
+    // While a reel transcribes: the sort's pill, with its step.
+    ".igs-tx-pill .igs-pill-body{min-width:180px;}",
+
+    // The transcript, once it's ready, and a transcription's failure.
+    // Never taller than the window: the text scrolls inside its box instead.
+    ".igs-dialog.igs-result{display:flex;flex-direction:column;max-width:560px;",
+    "max-height:calc(100vh - 32px);overflow:hidden;}",
+    ".igs-dialog.igs-result.is-wide{max-width:960px;}",
+    ".igs-result>*{flex:none;}",
+    ".igs-dialog.igs-result .igs-dialog-head{margin-bottom:2px;}",
+    ".igs-dialog p.igs-result-sub{margin:0 34px 14px 40px;color:var(--gray);font:500 12.5px/1.4 var(--font);}",
+    ".igs-dialog p.igs-result-msg{margin:0;color:var(--ink-2);}",
+    // The transcript, and the original script beside it when it's shown.
+    ".igs-result>.igs-tx-panes{flex:1 1 auto;}",
+    ".igs-tx-panes{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;min-height:0;}",
+    ".igs-tx-panes.is-split{grid-template-columns:repeat(2,minmax(0,1fr));}",
+    ".igs-tx-pane{display:flex;flex-direction:column;gap:6px;min-width:0;min-height:0;}",
+    ".igs-tx-pane[hidden]{display:none;}",
+    ".igs-pane-label{margin:0;color:var(--gray);font:600 11.5px/1.3 var(--font);}",
+    ".igs-tx-panes:not(.is-split) .igs-pane-label{display:none;}",
+    ".igs-tx-text{flex:1 1 auto;min-height:0;max-height:min(52vh,420px);overflow:auto;",
+    "overscroll-behavior:contain;margin:0;padding:12px 14px;",
+    "border:1px solid var(--line);border-radius:var(--r-input);background:var(--bg-2);color:var(--ink);",
+    "font:400 14px/1.55 var(--font);white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;}",
+    // Too narrow for two columns: one above the other, each still scrolling.
+    "@media (max-width:640px){.igs-tx-panes.is-split{grid-template-columns:minmax(0,1fr);}",
+    ".igs-tx-text{max-height:32vh;}}",
+    ".igs-link{display:inline-block;margin:8px 0 0;padding:2px 0;border:0;background:none;color:var(--gray);",
+    "cursor:pointer;font:500 12.5px/1.3 var(--font);text-decoration:underline;",
+    "text-decoration-color:var(--line-2);text-underline-offset:3px;}",
+    ".igs-link:hover{color:var(--ink);text-decoration-color:currentColor;}",
+    ".igs-result-actions{display:flex;justify-content:flex-end;gap:8px;margin:16px 0 0;}",
+    ".igs-dialog.is-bad{border-color:var(--bad-line);background:var(--bad-bg);}",
+    ".igs-dialog.is-bad h2{color:var(--bad);}",
+    ".igs-dialog.is-bad .igs-x:hover{background:var(--bg);}",
+
+    "@media (prefers-reduced-motion:reduce){",
+    ".igs-pill,.igs-modal{animation:none;}.igs-bar.is-open i{animation:none;left:0;width:100%;opacity:.5;}",
+    ".igs-tx.is-busy svg{animation:none;}.igs-tx,.igs-tile img,[data-ig-sorter-dim]{transition:none;}",
+    ".igs-tile:hover img{transform:none;}}"
   ].join("");
 
   function ensureStyles() {
@@ -281,6 +372,48 @@
     s.id = STYLE_ID;
     s.textContent = CSS;
     (document.head || document.documentElement).appendChild(s);
+  }
+
+  // ---- Theme ----
+  // Instagram's own light or dark theme, read off the page's background, so
+  // our cards sit in it rather than on it. Anything unreadable counts as light.
+  function parseRgb(css) {
+    var m = String(css || "").match(/rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)(?:[\s,/]+([\d.]+)(%?))?\s*\)/);
+    if (!m) return null;
+    var a = m[4] === undefined ? 1 : parseFloat(m[4]) / (m[5] ? 100 : 1);
+    return { r: +m[1], g: +m[2], b: +m[3], a: a };
+  }
+
+  function pageTheme() {
+    try {
+      var nodes = [document.body, document.documentElement];
+      for (var i = 0; i < nodes.length; i++) {
+        if (!nodes[i]) continue;
+        var c = parseRgb(getComputedStyle(nodes[i]).backgroundColor);
+        // A transparent body shows the root's background; look there instead.
+        if (!c || c.a < 0.5) continue;
+        var luma = (0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b) / 255;
+        return luma < 0.5 ? "dark" : "light";
+      }
+    } catch (e) {}
+    return "light";
+  }
+
+  // Marks a root of our UI: the tokens apply under it, in the page's theme.
+  function ours(node) {
+    node.setAttribute("data-sortcut", "");
+    node.setAttribute("data-theme", pageTheme());
+    return node;
+  }
+
+  function logo() {
+    var img = document.createElement("img");
+    img.className = "igs-logo";
+    img.alt = "";
+    try {
+      img.src = chrome.runtime.getURL("icons/128.png");
+    } catch (e) {}
+    return img;
   }
 
   var SVG_NS = "http://www.w3.org/2000/svg";
@@ -292,29 +425,45 @@
     idle: ["M5 6h14", "M5 10h14", "M5 14h10", "M5 18h7"],
     busy: ["M12 3a9 9 0 1 0 9 9"],
     done: ["M4.5 12.5l5 5 10-11"],
-    error: ["M6 6l12 12", "M18 6L6 18"]
+    error: ["M6 6l12 12", "M18 6L6 18"],
+    views: ["M2.5 12s3.5-6.5 9.5-6.5S21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z", "M12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6"],
+    likes: ["M12 20s-7.5-4.6-7.5-10.1A4.3 4.3 0 0 1 12 7.4a4.3 4.3 0 0 1 7.5 2.5C19.5 15.4 12 20 12 20z"],
+    comments: ["M20.5 11.5a8.5 8.5 0 0 1-12.4 7.6L3.5 20.5l1.4-4.4A8.5 8.5 0 1 1 20.5 11.5z"],
+    download: ["M12 4v11", "M7.5 10.5L12 15l4.5-4.5", "M5 19.5h14"],
+    chevron: ["M6.5 9.5L12 15l5.5-5.5"],
+    sheet: ["M5 3.5h14v17H5z", "M5 9h14", "M5 14.5h14", "M10.5 9v11.5"],
+    file: ["M6 3.5h8l4 4v13H6z", "M14 3.5v4h4"],
+    // Two heads — Similar accounts.
+    people: ["M9 11a3.5 3.5 0 1 0 0-7a3.5 3.5 0 1 0 0 7", "M2.5 20a6.5 6.5 0 0 1 13 0",
+      "M15.5 4.3a3.5 3.5 0 0 1 0 6.4", "M18 14.3a6.5 6.5 0 0 1 3.5 5.7"],
+    search: ["M11 4a7 7 0 1 0 0 14a7 7 0 1 0 0-14", "M20 20l-4-4"]
   };
 
-  function setIcon(btn, name) {
-    while (btn.firstChild) btn.removeChild(btn.firstChild);
+  function svgIcon(name, size, width) {
     var svg = document.createElementNS(SVG_NS, "svg");
     svg.setAttribute("viewBox", "0 0 24 24");
-    svg.setAttribute("width", "15");
-    svg.setAttribute("height", "15");
+    svg.setAttribute("width", String(size));
+    svg.setAttribute("height", String(size));
     svg.setAttribute("fill", "none");
     svg.setAttribute("stroke", "currentColor");
-    svg.setAttribute("stroke-width", "2.2");
+    svg.setAttribute("stroke-width", String(width || 2));
     svg.setAttribute("stroke-linecap", "round");
     svg.setAttribute("stroke-linejoin", "round");
+    svg.setAttribute("aria-hidden", "true");
     ICONS[name].forEach(function (d) {
       var path = document.createElementNS(SVG_NS, "path");
       path.setAttribute("d", d);
       svg.appendChild(path);
     });
-    btn.appendChild(svg);
+    return svg;
   }
 
-  var IDLE_LABEL = "Transcribe this reel and download it as .txt";
+  function setIcon(btn, name) {
+    while (btn.firstChild) btn.removeChild(btn.firstChild);
+    btn.appendChild(svgIcon(name, 15, 2.2));
+  }
+
+  var IDLE_LABEL = "Transcribe this reel";
 
   // Status lines the worker sends while a job waits on the server ("Waiting
   // in queue…"), keyed by reel code so each reaches the tile that asked.
@@ -340,32 +489,6 @@
     return x;
   }
 
-  // Every failure gets one of these on its reel, and it stays until it's
-  // dismissed or the reel is tried again. The tile's own tooltip resets after a
-  // few seconds, which is too short to read, let alone report.
-  function showFailureCard(cell, text) {
-    clearFailureCard(cell);
-    var card = el("div", "igs-card");
-    card.setAttribute("role", "alert");
-    card.appendChild(el("span", "igs-card-title", "Couldn't transcribe"));
-    card.appendChild(el("span", "igs-card-msg", text));
-    card.appendChild(
-      closeButton("Dismiss", function () {
-        card.remove();
-      })
-    );
-    // Clicks stay on the card: none of them should reach Instagram.
-    card.addEventListener("click", function (ev) {
-      ev.stopPropagation();
-    });
-    cell.appendChild(card);
-  }
-
-  function clearFailureCard(cell) {
-    var old = cell.querySelector(".igs-card");
-    if (old) old.remove();
-  }
-
   // ---- Dialogs ----
   // A Transcribe click that can't go ahead lands in one of these instead: the
   // sign-in dialog when signed out (Google only opens from its button), the
@@ -385,7 +508,7 @@
     ensureStyles();
 
     var open = true;
-    var backdrop = el("div", "igs-modal");
+    var backdrop = ours(el("div", "igs-modal"));
     var box = el("div", "igs-dialog");
     box.setAttribute("role", "dialog");
     box.setAttribute("aria-modal", "true");
@@ -393,10 +516,7 @@
     box.setAttribute("aria-describedby", "igs-dialog-text");
 
     var head = el("div", "igs-dialog-head");
-    var marks = el("div", "igs-marks");
-    marks.setAttribute("aria-hidden", "true");
-    for (var i = 0; i < 3; i++) marks.appendChild(el("i"));
-    head.appendChild(marks);
+    head.appendChild(logo());
     var title = el("h2", "", o.title);
     title.id = "igs-dialog-title";
     head.appendChild(title);
@@ -426,6 +546,8 @@
       document.removeEventListener("keydown", onKey, true);
       backdrop.remove();
       if (returnFocus && returnFocus.isConnected) returnFocus.focus();
+      // A transcript that finished while this was up.
+      showNextResult();
     }
 
     // Escape closes; Tab stays between the dialog's two buttons. Nothing else
@@ -494,10 +616,12 @@
     });
   }
 
-  function showProDialog(returnFocus) {
+  // o, optional: { title, text } for a feature other than transcription.
+  function showProDialog(returnFocus, o) {
+    o = o || {};
     showDialog(returnFocus, {
-      title: "Upgrade to transcribe",
-      text: "Transcription is part of Sortcut Pro.",
+      title: o.title || "Upgrade to transcribe",
+      text: o.text || "Transcription is part of Sortcut Pro.",
       action: "Upgrade to Pro",
       onAction: function (ui) {
         window.open(PRICING_URL, "_blank", "noopener");
@@ -506,9 +630,300 @@
     });
   }
 
+  // ---- Transcription, on the page ----
+  // While a reel transcribes, the sorted grid dims behind the same pill a sort
+  // shows, with the step the worker is on, until the job ends. When it's done,
+  // the transcript (or why it failed) opens in a card: one card at a time, the
+  // others waiting their turn. Nothing downloads unless Download .txt is
+  // clicked.
+  var TX_PILL_ID = "ig-sorter-tx-progress";
+  var txJobs = []; // { code, label }, oldest first, while they run
+  var txPillAway = false; // the sorted grid went, for the jobs running now
+
+  function sortedGrid() {
+    var wrap = document.getElementById(WRAP_ID);
+    return wrap && wrap.querySelector(".igs-grid");
+  }
+
+  function showTxProgress() {
+    var pill = document.getElementById(TX_PILL_ID);
+    var grid = sortedGrid();
+    if (!txJobs.length || txPillAway || !document.body) {
+      if (pill) pill.remove();
+      if (grid) grid.removeAttribute(DIM_ATTR);
+      return;
+    }
+    ensureStyles();
+    if (!pill) {
+      pill = ours(el("div", "igs-pill igs-tx-pill"));
+      pill.id = TX_PILL_ID;
+      pill.setAttribute("role", "status");
+      pill.appendChild(logo());
+      var body = el("div", "igs-pill-body");
+      var line = el("p", "igs-pill-text");
+      line.appendChild(el("b", "igs-tx-step"));
+      line.appendChild(el("span", "igs-pill-count"));
+      body.appendChild(line);
+      // No step has a size to measure, so the band just keeps moving.
+      var bar = el("div", "igs-bar is-open");
+      bar.appendChild(el("i"));
+      body.appendChild(bar);
+      pill.appendChild(body);
+      document.body.appendChild(pill);
+    }
+    // The newest job's step; the others only as a count.
+    pill.querySelector(".igs-tx-step").textContent = txJobs[txJobs.length - 1].label;
+    pill.querySelector(".igs-pill-count").textContent =
+      txJobs.length > 1 ? " · " + txJobs.length + " reels" : "";
+    if (grid) grid.setAttribute(DIM_ATTR, "1");
+  }
+
+  function hideTxProgress() {
+    txPillAway = true;
+    showTxProgress();
+  }
+
+  function txJob(code) {
+    for (var i = 0; i < txJobs.length; i++) if (txJobs[i].code === code) return txJobs[i];
+    return null;
+  }
+
+  function txStarted(code, label) {
+    txJobs.push({ code: code, label: label });
+    // A new transcription brings the pill back.
+    txPillAway = false;
+    showTxProgress();
+  }
+
+  function txStep(code, label) {
+    var job = txJob(code);
+    if (job) job.label = label;
+    showTxProgress();
+  }
+
+  function txEnded(code) {
+    txJobs = txJobs.filter(function (j) { return j.code !== code; });
+    showTxProgress();
+  }
+
+  // ---- Result cards ----
+  var results = []; // waiting to open: functions that open one
+  var resultOpen = false;
+
+  function queueResult(open) {
+    results.push(open);
+    showNextResult();
+  }
+
+  // One at a time, and not over a sign-in or Upgrade dialog.
+  function showNextResult() {
+    if (resultOpen || dialog || !results.length) return;
+    results.shift()();
+  }
+
+  // A centred card in the dialogs' style. o: { title, sub, bad, returnFocus,
+  // fill(box) }; fill adds the card's own content under the title.
+  function openResultCard(o) {
+    ensureStyles();
+    resultOpen = true;
+    var open = true;
+    var backdrop = ours(el("div", "igs-modal igs-result-modal"));
+    var box = el("div", "igs-dialog igs-result" + (o.bad ? " is-bad" : ""));
+    box.setAttribute("role", o.bad ? "alertdialog" : "dialog");
+    box.setAttribute("aria-modal", "true");
+    box.setAttribute("aria-labelledby", "igs-result-title");
+
+    var head = el("div", "igs-dialog-head");
+    head.appendChild(logo());
+    var title = el("h2", "", o.title);
+    title.id = "igs-result-title";
+    head.appendChild(title);
+    box.appendChild(head);
+    if (o.sub) box.appendChild(el("p", "igs-result-sub", o.sub));
+
+    o.fill(box);
+
+    var x = closeButton("Close", close);
+    box.appendChild(x);
+    backdrop.appendChild(box);
+
+    function close() {
+      if (!open) return;
+      open = false;
+      resultOpen = false;
+      document.removeEventListener("keydown", onKey, true);
+      backdrop.remove();
+      if (o.returnFocus && o.returnFocus.isConnected) o.returnFocus.focus();
+      showNextResult();
+    }
+
+    // Escape closes; Tab stays inside the card.
+    function onKey(ev) {
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        ev.stopPropagation();
+        close();
+      } else if (ev.key === "Tab") {
+        var stops = Array.prototype.slice.call(box.querySelectorAll("button")).filter(function (b) {
+          return !b.disabled && !b.hidden;
+        });
+        var first = stops[0];
+        var last = stops[stops.length - 1];
+        var active = document.activeElement;
+        if (ev.shiftKey ? active === first || !box.contains(active) : active === last) {
+          ev.preventDefault();
+          (ev.shiftKey ? last : first).focus();
+        }
+      }
+    }
+
+    // Clicks stay in the card: none of them should reach Instagram.
+    backdrop.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+    });
+    document.addEventListener("keydown", onKey, true);
+    (document.body || document.documentElement).appendChild(backdrop);
+    var firstButton = box.querySelector("button");
+    (o.bad ? x : firstButton || x).focus();
+    return { close: close };
+  }
+
+  // "Hindi → Hinglish": the language heard and, when the text was romanised,
+  // what it was written in. The worker's language is a name or a code.
+  function languageName(lang) {
+    var s = String(lang || "").trim();
+    if (!s || s === "unknown") return "Unknown language";
+    if (/^[a-z]{2,3}$/i.test(s)) {
+      try {
+        var n = new Intl.DisplayNames(["en"], { type: "language" }).of(s.toLowerCase());
+        if (n && n.toLowerCase() !== s.toLowerCase()) return n;
+      } catch (e) {}
+    }
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }
+
+  // What the transcript is written in: Hinglish for romanised Hindi.
+  function scriptName(r) {
+    var name = languageName(r.language);
+    if (!r.romanised) return name;
+    return name === "Hindi" ? "Hinglish" : "Latin script";
+  }
+
+  function languageLabel(r) {
+    var name = languageName(r.language);
+    return r.romanised ? name + " → " + scriptName(r) : name;
+  }
+
+  // The clipboard, or failing that the old select-and-copy. done(ok).
+  function copyText(text, holder, done) {
+    function fallback() {
+      var ok = false;
+      try {
+        var ta = el("textarea");
+        ta.value = text;
+        ta.setAttribute("readonly", "");
+        ta.style.cssText = "position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;";
+        holder.appendChild(ta);
+        ta.select();
+        ok = document.execCommand("copy");
+        ta.remove();
+      } catch (e) {}
+      done(!!ok);
+    }
+    try {
+      navigator.clipboard.writeText(text).then(function () { done(true); }, fallback);
+    } catch (e) {
+      fallback();
+    }
+  }
+
+  var COPY_LABEL = "Copy text";
+
+  function showTranscriptCard(p, r, returnFocus) {
+    openResultCard({
+      title: "Transcript",
+      sub: (p.code || "reel") + " · " + languageLabel(r),
+      returnFocus: returnFocus,
+      fill: function (box) {
+        // Each text in its own scrolling box; the original, when shown, sits
+        // beside the transcript and the card widens to hold both.
+        var panes = el("div", "igs-tx-panes");
+        function pane(label, text) {
+          var wrap = el("div", "igs-tx-pane");
+          wrap.appendChild(el("p", "igs-pane-label", label));
+          var t = el("div", "igs-tx-text", text);
+          t.setAttribute("tabindex", "0");
+          wrap.appendChild(t);
+          panes.appendChild(wrap);
+          return wrap;
+        }
+        pane(scriptName(r), r.text);
+        box.appendChild(panes);
+
+        if (r.original) {
+          var orig = pane("Original script", r.original);
+          orig.hidden = true;
+          var toggle = el("button", "igs-link", "Show original script");
+          toggle.type = "button";
+          toggle.setAttribute("aria-expanded", "false");
+          toggle.addEventListener("click", function (ev) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            orig.hidden = !orig.hidden;
+            panes.classList.toggle("is-split", !orig.hidden);
+            box.classList.toggle("is-wide", !orig.hidden);
+            toggle.textContent = orig.hidden ? "Show original script" : "Hide original script";
+            toggle.setAttribute("aria-expanded", String(!orig.hidden));
+          });
+          box.appendChild(toggle);
+        }
+
+        var actions = el("div", "igs-result-actions");
+        var copy = el("button", "igs-primary", COPY_LABEL);
+        copy.type = "button";
+        var timer = null;
+        copy.addEventListener("click", function (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          copyText(r.text, box, function (ok) {
+            copy.textContent = ok ? "Copied ✓" : "Couldn't copy";
+            clearTimeout(timer);
+            timer = setTimeout(function () {
+              copy.textContent = COPY_LABEL;
+            }, 2000);
+          });
+        });
+        var save = el("button", "igs-ghost");
+        save.type = "button";
+        save.appendChild(svgIcon("download", 15, 2));
+        save.appendChild(el("span", "", "Download .txt"));
+        save.addEventListener("click", function (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          downloadTranscript(p, r);
+        });
+        actions.appendChild(copy);
+        actions.appendChild(save);
+        box.appendChild(actions);
+      }
+    });
+  }
+
+  function showFailureResult(p, text, returnFocus) {
+    openResultCard({
+      title: "Couldn't transcribe",
+      sub: p.code || "",
+      bad: true,
+      returnFocus: returnFocus,
+      fill: function (box) {
+        box.appendChild(el("p", "igs-result-msg", text));
+      }
+    });
+  }
+
   // A tile is an <a> to the post, so anything placed inside it has to stop its
   // own clicks from navigating away mid-transcription.
-  function buildTranscribeButton(p, cell) {
+  function buildTranscribeButton(p) {
     var btn = document.createElement("button");
     btn.type = "button";
     btn.className = "igs-tx";
@@ -534,21 +949,23 @@
     });
 
     function start() {
-      clearFailureCard(cell);
       btn.disabled = true;
       state("busy", "Transcribing…");
+      txStarted(p.code, "Transcribing…");
       // Label only: re-running state() would restart the spinner each time.
       TX_PROGRESS[p.code] = function (label) {
         btn.title = label;
         btn.setAttribute("aria-label", label);
+        txStep(p.code, label);
       };
 
       var settle = function (name, label) {
         delete TX_PROGRESS[p.code];
+        txEnded(p.code);
         btn.disabled = false;
         state(name, label);
         // Return to idle so it can be run again — an expired link and a rate
-        // limit both clear up, and a saved transcript may want re-downloading.
+        // limit both clear up.
         setTimeout(function () {
           state("idle", IDLE_LABEL);
         }, 4000);
@@ -557,7 +974,7 @@
       // The same words on the tile, on the card and in the popup.
       var fail = function (text) {
         settle("error", text);
-        showFailureCard(cell, text);
+        queueResult(function () { showFailureResult(p, text, btn); });
         saveTranscribeStatus(false, p.code, text);
       };
 
@@ -571,6 +988,7 @@
           // successful sign-in runs this same reel again; on Free, it offers
           // the upgrade.
           delete TX_PROGRESS[p.code];
+          txEnded(p.code);
           btn.disabled = false;
           state("idle", IDLE_LABEL);
           if (res.signedOut) showSignInDialog(btn, start);
@@ -581,11 +999,10 @@
           fail(res.error || "Transcription failed.");
           return;
         }
-        downloadTranscript(p, res.result);
-        settle("done", "Saved — click to download again");
-        saveTranscribeStatus(
-          true, p.code, "Transcript saved (" + (res.result.language || "unknown") + ")."
-        );
+        var r = res.result;
+        settle("done", "Transcript ready");
+        queueResult(function () { showTranscriptCard(p, r, btn); });
+        saveTranscribeStatus(true, p.code, "Transcript ready (" + languageLabel(r) + ").");
       });
     }
 
@@ -613,110 +1030,194 @@
     );
   }
 
+  // The header card's title for each sort.
+  var SORT_TITLE = {
+    views: "Top reels by views",
+    likes: "Top reels by likes",
+    comments: "Top reels by comments",
+    outlier: "Outlier reels by views",
+    outlierLikes: "Outlier reels by likes",
+    outlierComments: "Outlier reels by comments"
+  };
+
+  function reels(n) {
+    return n + (n === 1 ? " reel" : " reels");
+  }
+
+  // The header's Export menu: the popup's four exports, through the same
+  // functions. Google Sheets goes through the worker, as the popup's does.
+  var EXPORT_ITEMS = [
+    { kind: "csv", label: "CSV", icon: "file" },
+    { kind: "json", label: "JSON", icon: "file" },
+    { kind: "xlsx", label: "Excel", icon: "sheet" },
+    { kind: "sheets", label: "Google Sheets", icon: "sheet" }
+  ];
+  var closeExportMenu = null; // set while the sorted grid is up
+
+  function sheetsFromPage(note) {
+    function say(text, bad) {
+      note.textContent = text;
+      note.hidden = !text;
+      note.classList.toggle("is-bad", !!bad);
+    }
+    say("Exporting to Google Sheets…");
+    try {
+      chrome.runtime.sendMessage({ type: "sheetsExport", tabId: TAB_ID }, function (res) {
+        if (chrome.runtime.lastError || !res) {
+          say("Extension worker unavailable — reload the extension.", true);
+          return;
+        }
+        if (res.ok) say("Opened in Google Sheets.");
+        else say(res.error || "Nothing to export on this page. Run a sort first.", true);
+      });
+    } catch (e) {
+      say("Extension worker unavailable — reload the extension.", true);
+    }
+  }
+
+  function buildExportMenu(note) {
+    var box = el("div", "igs-menu-wrap");
+    var btn = el("button", "igs-primary");
+    btn.type = "button";
+    btn.setAttribute("aria-haspopup", "menu");
+    btn.setAttribute("aria-expanded", "false");
+    btn.appendChild(svgIcon("download", 15, 2));
+    btn.appendChild(el("span", "", "Export"));
+    btn.appendChild(svgIcon("chevron", 14, 2));
+
+    var menu = el("div", "igs-menu");
+    menu.setAttribute("role", "menu");
+    menu.hidden = true;
+    EXPORT_ITEMS.forEach(function (item) {
+      var b = el("button", "igs-menu-item");
+      b.type = "button";
+      b.setAttribute("role", "menuitem");
+      b.appendChild(svgIcon(item.icon, 16, 1.8));
+      b.appendChild(el("span", "", item.label));
+      b.addEventListener("click", function (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        close();
+        if (item.kind === "sheets") sheetsFromPage(note);
+        else exportData(item.kind);
+      });
+      menu.appendChild(b);
+    });
+
+    function onDoc(ev) {
+      if (ev.type === "keydown" ? ev.key === "Escape" : !box.contains(ev.target)) close();
+    }
+    function close() {
+      if (menu.hidden) return;
+      menu.hidden = true;
+      btn.setAttribute("aria-expanded", "false");
+      document.removeEventListener("click", onDoc, true);
+      document.removeEventListener("keydown", onDoc, true);
+    }
+    btn.addEventListener("click", function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (!menu.hidden) return close();
+      menu.hidden = false;
+      btn.setAttribute("aria-expanded", "true");
+      document.addEventListener("click", onDoc, true);
+      document.addEventListener("keydown", onDoc, true);
+    });
+    closeExportMenu = close;
+
+    box.appendChild(btn);
+    box.appendChild(menu);
+    return box;
+  }
+
+  function stat(name, value, main) {
+    var s = el("span", "igs-stat" + (main ? " is-main" : ""));
+    s.appendChild(svgIcon(name, main ? 14 : 12, 2.2));
+    s.appendChild(el("span", "", fmt(value)));
+    return s;
+  }
+
   function buildGrid(posts, sortBy, ranked, median) {
     if (ranked === null || ranked === undefined) ranked = posts.length;
     // Which metric the outlier score is measured on, or null for a plain sort.
     var outlierOn = OUTLIER_FIELD[sortBy] || null;
+    // The metric the order is by, shown first and largest on every tile.
+    var metric = outlierOn || (METRIC_SORTS[sortBy] ? sortBy : null);
     ensureStyles();
 
-    var wrap = document.createElement("div");
+    var wrap = ours(el("div", "igs-wrap"));
     wrap.id = WRAP_ID;
-    wrap.style.cssText = "width:100%;margin:0 0 24px 0;";
 
-    var bar = document.createElement("div");
-    bar.style.cssText =
-      "display:flex;align-items:center;justify-content:space-between;gap:12px;" +
-      "padding:10px 12px;margin-bottom:10px;border-radius:10px;" +
-      "background:#17151C;color:#EFECF4;" +
-      "font:600 13px/1.3 -apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;";
+    // ---- Header card ----
+    var head = el("div", "igs-head");
+    head.appendChild(logo());
+    var text = el("div", "igs-head-text");
+    text.appendChild(el("h2", "igs-title", SORT_TITLE[sortBy] || "Reels sorted by " + sortBy));
 
-    var label = document.createElement("span");
     var rest = posts.length - ranked;
-    if (outlierOn && median) {
-      // The median is the whole basis of the score, so state it rather than
-      // leaving every badge as an unexplained multiplier.
-      label.textContent =
-        ranked + " reels \u00b7 outlier score vs median " + fmt(Math.round(median)) + " " + outlierOn +
-        (rest > 0 ? " \u00b7 " + rest + " with none" : "");
-    } else if (METRIC_SORTS[sortBy] && rest > 0) {
-      // Say plainly that the tail isn't ranked, otherwise the numbered badges
-      // imply an ordering the filler reels don't actually have.
-      label.textContent =
-        posts.length + " reels \u00b7 " + ranked + " ranked by " + (outlierOn || sortBy) +
-        " \u00b7 " + rest + " with none";
-    } else {
-      label.textContent =
-        posts.length + " reels sorted by " + sortBy + " \u00b7 highest first";
-    }
-    bar.appendChild(label);
+    var sub = reels(posts.length);
+    // The median is the whole basis of the score, so state it rather than
+    // leaving every badge as an unexplained multiplier.
+    if (outlierOn && median) sub += " · median " + fmt(Math.round(median)) + " " + outlierOn;
+    // Say plainly that the tail isn't ranked, otherwise the numbered badges
+    // imply an ordering the filler reels don't actually have.
+    if (metric && rest > 0) sub += " · " + rest + " with no " + metric;
+    text.appendChild(el("p", "igs-sub", sub));
 
-    var restore = document.createElement("button");
-    restore.textContent = "Restore original";
-    restore.style.cssText =
-      "border:0;border-radius:7px;padding:6px 11px;cursor:pointer;" +
-      "background:#E8A33D;color:#17151C;font:600 12px/1 inherit;";
+    var note = el("p", "igs-note");
+    note.setAttribute("role", "status");
+    note.hidden = true;
+    text.appendChild(note);
+    head.appendChild(text);
+
+    // Similar accounts (Pro only, once the worker says so), Restore, then
+    // Export at the far right.
+    var actions = el("div", "igs-actions");
+    var restore = el("button", "igs-ghost", "Restore original");
+    restore.type = "button";
     restore.addEventListener("click", function () {
       teardown();
     });
-    bar.appendChild(restore);
-    wrap.appendChild(bar);
+    actions.appendChild(restore);
+    addSimilarButton(actions, restore);
+    actions.appendChild(buildExportMenu(note));
+    head.appendChild(actions);
+    wrap.appendChild(head);
 
-    var grid = document.createElement("div");
-    grid.style.cssText =
-      "display:grid;grid-template-columns:repeat(4,1fr);gap:4px;width:100%;";
+    // ---- Tiles ----
+    var grid = el("div", "igs-grid");
 
     posts.forEach(function (p, idx) {
       var isFiller = idx >= ranked;
 
-      var cell = document.createElement("div");
-      cell.className = "igs-cell";
+      var cell = el("div", "igs-cell" + (idx === 0 && !isFiller ? " igs-top" : ""));
 
       var tile = document.createElement("a");
       tile.href = p.url || "#";
       tile.target = "_blank";
       tile.rel = "noopener noreferrer";
-      // The class is what the transcribe button's hover rule hangs off; the
-      // positioning stays inline to match the rest of the grid.
       tile.className = "igs-tile";
-      tile.style.cssText =
-        "position:relative;display:block;aspect-ratio:1/1;overflow:hidden;" +
-        "background:#221E29;text-decoration:none;";
 
       if (p.thumbnail) {
         var img = document.createElement("img");
         img.src = p.thumbnail;
         img.loading = "lazy";
         img.referrerPolicy = "no-referrer";
-        img.style.cssText =
-          "width:100%;height:100%;object-fit:cover;display:block;";
+        img.alt = "";
         tile.appendChild(img);
       }
 
-      var rank = document.createElement("div");
       // Filler posts get a dash, not a position. Numbering them would claim
       // post #21 beat post #22 on a metric neither of them has.
-      rank.textContent = isFiller ? "–" : String(idx + 1);
-      rank.style.cssText =
-        "position:absolute;top:6px;left:6px;min-width:20px;height:20px;" +
-        "display:flex;align-items:center;justify-content:center;padding:0 5px;" +
-        "border-radius:6px;background:rgba(23,21,28,.82);color:" +
-        (isFiller ? "#8F8A99" : "#E8A33D") + ";" +
-        "font:700 11px/1 ui-monospace,SFMono-Regular,Menlo,monospace;";
-      tile.appendChild(rank);
+      tile.appendChild(el("div", "igs-badge igs-rank" + (isFiller ? " is-filler" : ""), isFiller ? "–" : String(idx + 1)));
 
       // Only above the baseline. A 0.4x badge on a below-median post is noise —
       // and at exactly 1x the score says nothing the median line doesn't.
       if (outlierOn && p.outlierScore > 1) {
-        var score = document.createElement("div");
-        score.textContent = fmtScore(p.outlierScore);
+        var score = el("div", "igs-badge igs-score", fmtScore(p.outlierScore));
         score.title =
           fmt(p[outlierOn]) + " " + outlierOn +
           " vs median " + fmt(Math.round(median));
-        score.style.cssText =
-          "position:absolute;top:6px;right:6px;height:20px;display:flex;" +
-          "align-items:center;padding:0 7px;border-radius:6px;" +
-          "background:#E8A33D;color:#17151C;" +
-          "font:700 11px/1 ui-monospace,SFMono-Regular,Menlo,monospace;";
         tile.appendChild(score);
       }
 
@@ -725,22 +1226,21 @@
       // rendition, so gating on it hid the button on literally every tile. The
       // URL is resolved at click time instead.
       var canTranscribe = !!p.isVideo;
-      if (canTranscribe) tile.appendChild(buildTranscribeButton(p, cell));
+      if (canTranscribe) tile.appendChild(buildTranscribeButton(p));
 
-      var meta = document.createElement("div");
-      meta.style.cssText =
-        "position:absolute;left:0;right:0;bottom:0;" +
-        // Keep the stats clear of the transcribe button in the same corner.
-        "padding:16px " + (canTranscribe ? "42px" : "8px") + " 7px 8px;" +
-        "background:linear-gradient(transparent,rgba(23,21,28,.88));" +
-        "color:#fff;display:flex;gap:9px;flex-wrap:wrap;" +
-        "font:600 11px/1 ui-monospace,SFMono-Regular,Menlo,monospace;";
-
-      var parts = [];
-      if (p.views !== null && p.views !== undefined) parts.push("\u25B6 " + fmt(p.views));
-      parts.push("\u2665 " + fmt(p.likes));
-      parts.push("\u25CB " + fmt(p.comments));
-      meta.textContent = parts.join("   ");
+      // Keep the stats clear of the transcribe button in the same corner.
+      var meta = el("div", "igs-meta" + (canTranscribe ? " has-tx" : ""));
+      var shown = ["views", "likes", "comments"].filter(function (k) {
+        return k !== "views" || (p.views !== null && p.views !== undefined);
+      });
+      // The sort's own metric first; views lead otherwise.
+      if (metric && shown.indexOf(metric) > 0) {
+        shown.splice(shown.indexOf(metric), 1);
+        shown.unshift(metric);
+      }
+      shown.forEach(function (k, i) {
+        meta.appendChild(stat(k, p[k], i === 0));
+      });
       tile.appendChild(meta);
 
       cell.appendChild(tile);
@@ -749,6 +1249,617 @@
 
     wrap.appendChild(grid);
     return wrap;
+  }
+
+  // ---- Similar accounts (Pro) ----
+  // A curated list of creators by niche (decisions.md §14), which the worker
+  // fetches and caches. The header's button shows only once the worker says
+  // the account is Pro; the server refuses everyone else anyway, and a refusal
+  // here closes the panel for the Upgrade dialog.
+  //
+  // The panel is a drawer in a closed shadow root, so Instagram's styles and
+  // scripts can't reach in. The tokens still do: custom properties inherit
+  // from its host, which is marked like the rest of our UI. Every field is
+  // untrusted display text, set with textContent only, and a link is only
+  // ever built from a username of Instagram's own characters.
+  var SIMILAR_ID = "ig-sorter-similar";
+  var SIMILAR_NICHE_KEY = "similarNiche"; // chrome.storage.local: the niche last chosen
+  // chrome.storage.local: { username, sortBy, limit, maxReels, expiresAt }.
+  // Sort reels leaves it for the tab it opens, which uses it once.
+  var PENDING_SORT_KEY = "pendingSort";
+  var PENDING_SORT_MS = 60 * 1000;
+  // Sort reels when this page shows no sort of its own: the popup's Pro default.
+  var DEFAULT_SORT = { sortBy: "views", limit: 100, maxReels: null };
+  var USERNAME_RE = /^[A-Za-z0-9._]{1,30}$/;
+  var SIMILAR_FAILED = "Couldn't load similar accounts. Please try again.";
+  // White initials read on each of these.
+  var AVATAR_COLORS = ["#D62976", "#962FBF", "#4F5BD5", "#E8590C", "#0E9F6E", "#0277BD", "#C42B4B", "#6D28D9"];
+
+  var SIMILAR_CSS = [
+    ":host{all:initial;}",
+    "*{box-sizing:border-box;}",
+    "[hidden]{display:none !important;}",
+    ".scrim{position:fixed;inset:0;z-index:2147483645;background:rgba(12,11,16,.28);animation:fade .2s ease both;}",
+    ".drawer{position:fixed;top:0;right:0;bottom:0;z-index:2147483645;display:flex;flex-direction:column;",
+    "width:420px;max-width:100vw;margin:0;padding:0;border-left:1px solid var(--line);",
+    "background:var(--bg);color:var(--ink);box-shadow:var(--shadow-float);",
+    "font:400 14px/1.45 var(--font);-webkit-font-smoothing:antialiased;text-align:left;",
+    "animation:slide .25s ease both;}",
+    "button,input,select{font-family:var(--font);}",
+    ":focus-visible{outline:3px solid var(--focus);outline-offset:2px;}",
+
+    // Head
+    ".head{position:relative;display:flex;align-items:center;gap:12px;padding:18px 58px 14px 18px;}",
+    ".igs-logo{display:block;flex:none;width:32px;height:32px;margin:0;border:0;}",
+    "h2{margin:0;padding:0;color:var(--ink);font:700 17px/1.25 var(--font);letter-spacing:-.02em;}",
+    ".count{margin:2px 0 0;color:var(--gray);font:500 12.5px/1.3 var(--font);}",
+    ".igs-x{position:absolute;top:18px;right:16px;width:32px;height:32px;margin:0;padding:0;border:0;",
+    "border-radius:50%;background:transparent;color:var(--gray);display:flex;align-items:center;",
+    "justify-content:center;font:400 22px/1 var(--font);cursor:pointer;}",
+    ".igs-x:hover{background:var(--bg-2);color:var(--ink);}",
+
+    // Niche, filter chips, search
+    ".controls{display:flex;flex-direction:column;gap:10px;padding:0 18px 14px;border-bottom:1px solid var(--line);}",
+    ".field{position:relative;display:block;margin:0;}",
+    ".field svg{position:absolute;top:50%;transform:translateY(-50%);color:var(--gray);pointer-events:none;}",
+    ".niche svg{right:12px;}",
+    ".find svg{left:12px;}",
+    "select,input{display:block;width:100%;height:40px;margin:0;border:1px solid var(--line-2);",
+    "border-radius:var(--r-input);background:var(--bg);color:var(--ink);outline:none;}",
+    "select{appearance:none;-webkit-appearance:none;padding:0 38px 0 12px;cursor:pointer;font:600 13.5px/1 var(--font);}",
+    "input{padding:0 12px 0 36px;font:400 13.5px/1 var(--font);}",
+    "input::placeholder{color:var(--gray-2);}",
+    "select:focus,input:focus{border-color:var(--pink);box-shadow:0 0 0 3px var(--focus);}",
+    ".chips{display:flex;flex-wrap:wrap;gap:6px;margin:0;padding:0;}",
+    ".chip{display:inline-flex;align-items:center;gap:5px;height:30px;margin:0;padding:0 12px;",
+    "border:1px solid var(--line-2);border-radius:var(--r-pill);background:transparent;color:var(--ink-2);",
+    "cursor:pointer;white-space:nowrap;font:600 12.5px/1 var(--font);}",
+    ".chip:hover{background:var(--bg-2);}",
+    ".chip i{font-style:normal;font-weight:500;color:var(--gray);}",
+    ".chip[aria-pressed=\"true\"]{border-color:var(--ink);background:var(--ink);color:var(--bg);}",
+    ".chip[aria-pressed=\"true\"] i{color:inherit;opacity:.7;}",
+
+    // The list
+    ".body{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain;padding:14px 18px 24px;}",
+    ".list{display:flex;flex-direction:column;gap:10px;margin:0;padding:0;list-style:none;}",
+    ".card{display:grid;grid-template-columns:44px minmax(0,1fr);gap:0 12px;margin:0;padding:14px;",
+    "border:1px solid var(--line);border-radius:var(--r-card);background:var(--bg);}",
+    ".avatar{display:flex;align-items:center;justify-content:center;width:44px;height:44px;",
+    "border-radius:50%;color:#fff;font:700 18px/1 var(--font);user-select:none;}",
+    ".info{min-width:0;}",
+    ".user,.name{margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}",
+    ".user{color:var(--ink);font:650 14px/1.3 var(--font);}",
+    ".name{color:var(--ink-2);font:400 13px/1.35 var(--font);}",
+    ".tag{display:inline-block;max-width:100%;margin:7px 0 0;padding:3px 9px;overflow:hidden;",
+    "text-overflow:ellipsis;white-space:nowrap;border-radius:var(--r-pill);background:var(--bg-2);",
+    "color:var(--ink-2);font:600 11.5px/1.3 var(--font);vertical-align:top;}",
+    ".topics{margin:7px 0 0;color:var(--gray);font:400 12.5px/1.45 var(--font);overflow-wrap:anywhere;}",
+    ".acts{grid-column:1 / -1;display:flex;gap:8px;margin:12px 0 0;}",
+    ".ghost,.primary{display:inline-flex;flex:1 1 0;align-items:center;justify-content:center;",
+    "height:34px;margin:0;padding:0 14px;border:0;border-radius:var(--r-pill);cursor:pointer;",
+    "white-space:nowrap;font:600 13px/1 var(--font);transition:filter .12s ease,background .12s ease;}",
+    ".ghost{background:var(--bg-2);color:var(--ink);}",
+    ".ghost:hover{background:var(--line);}",
+    ".primary{background:var(--ig-btn);color:#fff;box-shadow:var(--shadow-btn);}",
+    ".primary:hover{filter:brightness(1.06);}",
+
+    // Loading, empty and failed
+    ".sk{pointer-events:none;}",
+    ".sk .avatar,.sk-line{background:var(--bg-2);animation:pulse 1.2s ease-in-out infinite;}",
+    ".sk-line{display:block;height:11px;margin:4px 0 9px;border-radius:6px;}",
+    ".state{margin:0;padding:40px 12px;color:var(--gray);text-align:center;font:500 13.5px/1.5 var(--font);}",
+    ".state.is-bad{color:var(--bad);}",
+    ".state .primary{flex:none;margin:14px auto 0;padding:0 22px;}",
+
+    "@keyframes fade{from{opacity:0;}to{opacity:1;}}",
+    "@keyframes slide{from{transform:translateX(24px);opacity:0;}to{transform:none;opacity:1;}}",
+    "@keyframes pulse{50%{opacity:.45;}}",
+    "@media (prefers-reduced-motion:reduce){.scrim,.drawer,.sk .avatar,.sk-line{animation:none;}}"
+  ].join("");
+
+  var similar = null; // { close } while the panel is open
+
+  function closeSimilar() {
+    if (similar) similar.close();
+  }
+
+  // Added to the header only when the worker answers Pro: Free and signed-out
+  // accounts never see it.
+  function addSimilarButton(actions, before) {
+    try {
+      chrome.runtime.sendMessage({ type: "isPro" }, function (res) {
+        if (chrome.runtime.lastError || !res || !res.ok || res.pro !== true) return;
+        if (before.parentElement !== actions || actions.querySelector(".igs-similar")) return;
+        var btn = el("button", "igs-ghost igs-similar");
+        btn.type = "button";
+        btn.appendChild(svgIcon("people", 15, 2));
+        btn.appendChild(el("span", "", "Similar accounts"));
+        btn.addEventListener("click", function (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          openSimilar(btn);
+        });
+        actions.insertBefore(btn, before);
+      });
+    } catch (e) {}
+  }
+
+  function dropSimilarButton() {
+    document.querySelectorAll(".igs-similar").forEach(function (b) {
+      b.remove();
+    });
+  }
+
+  function plural(n, word) {
+    return n + " " + word + (n === 1 ? "" : "s");
+  }
+
+  function byUsername(a, b) {
+    var x = a.username.toLowerCase();
+    var y = b.username.toLowerCase();
+    return x < y ? -1 : x > y ? 1 : 0;
+  }
+
+  // The accounts a niche shows: never the profile this page is on, nor one
+  // without a username a link can be built from.
+  function nicheAccounts(accounts, niche, here) {
+    return accounts.filter(function (a) {
+      return a.niche === niche && USERNAME_RE.test(a.username) && a.username.toLowerCase() !== here;
+    });
+  }
+
+  // Through the chip (null is All) and the search: username, full name or
+  // topics, ignoring case and a leading @. A to Z by username.
+  function similarList(accounts, filter, query) {
+    var q = query.trim().replace(/^@/, "").toLowerCase();
+    return accounts.filter(function (a) {
+      if (filter !== null && a.filter !== filter) return false;
+      if (!q) return true;
+      return [a.username, a.fullName, a.topics].some(function (s) {
+        return String(s || "").toLowerCase().indexOf(q) !== -1;
+      });
+    }).sort(byUsername);
+  }
+
+  // The same colour for a username every time.
+  function avatarColor(username) {
+    var h = 0;
+    var s = username.toLowerCase();
+    for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    return AVATAR_COLORS[h % AVATAR_COLORS.length];
+  }
+
+  function initialOf(a) {
+    var first = Array.from((a.fullName || "").trim())[0] || a.username.charAt(0);
+    return first.toUpperCase();
+  }
+
+  function openProfile(username) {
+    window.open("https://www.instagram.com/" + username + "/", "_blank", "noopener");
+  }
+
+  // Opens the account's Reels tab with a pending sort for it: this page's
+  // sort and depth, used once by that tab within PENDING_SORT_MS.
+  function sortReelsOf(username) {
+    var s = CURRENT_SORT || DEFAULT_SORT;
+    var url = "https://www.instagram.com/" + username + "/reels/";
+    var o = {};
+    o[PENDING_SORT_KEY] = {
+      username: username.toLowerCase(),
+      sortBy: s.sortBy,
+      limit: s.limit,
+      maxReels: s.maxReels || null,
+      expiresAt: Date.now() + PENDING_SORT_MS
+    };
+    try {
+      chrome.storage.local.set(o, function () {
+        window.open(url, "_blank", "noopener");
+      });
+    } catch (e) {
+      window.open(url, "_blank", "noopener");
+    }
+  }
+
+  // In a tab Sort reels opened: start the pending sort if it's for this
+  // profile's Reels tab, and only once. One for another profile is left for
+  // its own tab; an expired one goes.
+  function takePendingSort() {
+    var m = /^\/([A-Za-z0-9._]{1,30})\/reels\/?$/.exec(location.pathname);
+    var want = {};
+    want[PENDING_SORT_KEY] = null;
+    try {
+      chrome.storage.local.get(want, function (o) {
+        var p = o && o[PENDING_SORT_KEY];
+        if (!p || typeof p !== "object") return;
+        var now = Date.now();
+        // A time too far ahead (the clock was set back) counts as expired.
+        if (!(typeof p.expiresAt === "number" && p.expiresAt > now && p.expiresAt <= now + PENDING_SORT_MS)) {
+          chrome.storage.local.remove(PENDING_SORT_KEY);
+          return;
+        }
+        if (!m || typeof p.username !== "string" || p.username.toLowerCase() !== m[1].toLowerCase()) return;
+        var ok = !!SORT_TITLE[p.sortBy] && (p.limit === "all" || (Number.isInteger(p.limit) && p.limit > 0));
+        chrome.storage.local.remove(PENDING_SORT_KEY, function () {
+          if (ok) beginSort({ sortBy: p.sortBy, limit: p.limit, maxReels: p.maxReels });
+        });
+      });
+    } catch (e) {}
+  }
+
+  function emptyNode(n) {
+    while (n.firstChild) n.removeChild(n.firstChild);
+  }
+
+  function similarCard(a) {
+    var card = el("li", "card");
+    var avatar = el("div", "avatar", initialOf(a));
+    avatar.setAttribute("aria-hidden", "true");
+    avatar.style.setProperty("background", avatarColor(a.username));
+    card.appendChild(avatar);
+
+    var info = el("div", "info");
+    info.appendChild(el("p", "user", "@" + a.username));
+    if (a.fullName) info.appendChild(el("p", "name", a.fullName));
+    if (a.filter) info.appendChild(el("span", "tag", a.filter));
+    if (a.topics) info.appendChild(el("p", "topics", a.topics));
+    card.appendChild(info);
+
+    var acts = el("div", "acts");
+    var open = el("button", "ghost", "Open profile");
+    open.type = "button";
+    open.setAttribute("aria-label", "Open @" + a.username + "'s profile in a new tab");
+    open.addEventListener("click", function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      openProfile(a.username);
+    });
+    var sort = el("button", "primary", "Sort reels");
+    sort.type = "button";
+    sort.setAttribute("aria-label", "Sort @" + a.username + "'s reels in a new tab");
+    sort.addEventListener("click", function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      sortReelsOf(a.username);
+    });
+    acts.appendChild(open);
+    acts.appendChild(sort);
+    card.appendChild(acts);
+    return card;
+  }
+
+  function skeleton() {
+    var list = el("ul", "list");
+    list.setAttribute("aria-hidden", "true");
+    for (var i = 0; i < 6; i++) {
+      var card = el("li", "card sk");
+      card.appendChild(el("div", "avatar"));
+      var info = el("div", "info");
+      [60, 85, 40].forEach(function (w) {
+        var line = el("span", "sk-line");
+        line.style.setProperty("width", w + "%");
+        info.appendChild(line);
+      });
+      card.appendChild(info);
+      list.appendChild(card);
+    }
+    return list;
+  }
+
+  function openSimilar(returnFocus) {
+    closeSimilar();
+    closeDialog();
+
+    var open = true;
+    var here = ownerHere();
+    var data = null;
+    var niche = null;
+    var filter = null; // a filter's name, or null for All
+
+    var host = ours(el("div"));
+    host.id = SIMILAR_ID;
+    var root = host.attachShadow({ mode: "closed" });
+    var style = el("style");
+    style.textContent = SIMILAR_CSS;
+    root.appendChild(style);
+
+    var scrim = el("div", "scrim");
+    scrim.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      close();
+    });
+    root.appendChild(scrim);
+
+    var box = el("aside", "drawer");
+    box.setAttribute("role", "dialog");
+    box.setAttribute("aria-label", "Similar accounts");
+
+    var head = el("div", "head");
+    head.appendChild(logo());
+    var titles = el("div", "");
+    titles.appendChild(el("h2", "", "Similar accounts"));
+    var count = el("p", "count");
+    count.setAttribute("aria-live", "polite");
+    titles.appendChild(count);
+    head.appendChild(titles);
+    var x = closeButton("Close", close);
+    head.appendChild(x);
+    box.appendChild(head);
+
+    var controls = el("div", "controls");
+    controls.hidden = true;
+    var nicheField = el("label", "field niche");
+    var select = el("select");
+    select.setAttribute("aria-label", "Niche");
+    nicheField.appendChild(select);
+    nicheField.appendChild(svgIcon("chevron", 16, 2));
+    controls.appendChild(nicheField);
+    var chips = el("div", "chips");
+    chips.setAttribute("role", "group");
+    chips.setAttribute("aria-label", "Filter");
+    controls.appendChild(chips);
+    var findField = el("label", "field find");
+    findField.appendChild(svgIcon("search", 16, 2));
+    var input = el("input");
+    input.type = "search";
+    input.placeholder = "Search username, name or topic";
+    input.setAttribute("aria-label", "Search accounts");
+    input.setAttribute("autocomplete", "off");
+    input.setAttribute("spellcheck", "false");
+    findField.appendChild(input);
+    controls.appendChild(findField);
+    box.appendChild(controls);
+
+    var body = el("div", "body");
+    box.appendChild(body);
+    root.appendChild(box);
+
+    function close() {
+      if (!open) return;
+      open = false;
+      similar = null;
+      document.removeEventListener("keydown", onKey, true);
+      host.remove();
+      if (returnFocus && returnFocus.isConnected) returnFocus.focus();
+    }
+
+    // Escape closes, unless a dialog of ours is over the panel.
+    function onKey(ev) {
+      if (ev.key !== "Escape" || dialog) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      close();
+    }
+
+    function showState(text, bad, retry) {
+      controls.hidden = !data;
+      count.textContent = "";
+      emptyNode(body);
+      var p = el("div", "state" + (bad ? " is-bad" : ""));
+      p.setAttribute("role", "status");
+      p.appendChild(el("p", "", text));
+      if (retry) {
+        var again = el("button", "primary", "Retry");
+        again.type = "button";
+        again.addEventListener("click", function (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          load();
+        });
+        p.appendChild(again);
+      }
+      body.appendChild(p);
+    }
+
+    function nicheList() {
+      return nicheAccounts(data.accounts, niche, here);
+    }
+
+    function renderChips() {
+      emptyNode(chips);
+      var inNiche = nicheList();
+      var info = data.niches.filter(function (n) { return n.name === niche; })[0];
+      var names = [null].concat((info ? info.filters : []).map(function (f) { return f.name; }));
+      names.forEach(function (name) {
+        var n = name === null ? inNiche.length : inNiche.filter(function (a) { return a.filter === name; }).length;
+        if (name !== null && !n) return;
+        var chip = el("button", "chip", name === null ? "All" : name);
+        chip.type = "button";
+        chip.setAttribute("aria-pressed", String(filter === name));
+        chip.appendChild(el("i", "", String(n)));
+        chip.addEventListener("click", function (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          filter = name;
+          renderChips();
+          renderList();
+        });
+        chips.appendChild(chip);
+      });
+    }
+
+    function renderList() {
+      var list = similarList(nicheList(), filter, input.value);
+      count.textContent = plural(list.length, "account");
+      emptyNode(body);
+      if (!list.length) {
+        var none = el("p", "state", "No accounts match");
+        none.setAttribute("role", "status");
+        body.appendChild(none);
+        return;
+      }
+      var ul = el("ul", "list");
+      list.forEach(function (a) {
+        ul.appendChild(similarCard(a));
+      });
+      body.appendChild(ul);
+    }
+
+    function pickNiche(n) {
+      niche = n;
+      filter = null;
+      select.value = n;
+      renderChips();
+      renderList();
+    }
+
+    // The niche of the profile this page is on, else the last one chosen,
+    // else the first. Only niches with someone to show are offered.
+    function fill(last) {
+      var names = data.niches.map(function (n) { return n.name; }).filter(function (name) {
+        return nicheAccounts(data.accounts, name, here).length > 0;
+      });
+      if (!names.length) {
+        data = null;
+        showState("There are no similar accounts to show yet.", false, false);
+        return;
+      }
+      emptyNode(select);
+      names.forEach(function (name) {
+        var o = el("option", "", name + " (" + nicheAccounts(data.accounts, name, here).length + ")");
+        o.value = name;
+        select.appendChild(o);
+      });
+      var mine = data.accounts.filter(function (a) {
+        return a.username.toLowerCase() === here && names.indexOf(a.niche) !== -1;
+      })[0];
+      controls.hidden = false;
+      pickNiche(mine ? mine.niche : names.indexOf(last) !== -1 ? last : names[0]);
+    }
+
+    function load() {
+      data = null;
+      controls.hidden = true;
+      count.textContent = "Loading…";
+      emptyNode(body);
+      body.appendChild(skeleton());
+      try {
+        chrome.runtime.sendMessage({ type: "directory" }, function (res) {
+          if (!open) return;
+          if (chrome.runtime.lastError || !res) {
+            showState("Extension worker unavailable — reload the extension.", true, true);
+            return;
+          }
+          if (!res.ok) {
+            if (res.needsPro) {
+              close();
+              dropSimilarButton();
+              showProDialog(null, {
+                title: "Upgrade for similar accounts",
+                text: "Similar accounts is part of Sortcut Pro."
+              });
+              return;
+            }
+            showState(res.error || SIMILAR_FAILED, true, true);
+            return;
+          }
+          var d = res.directory;
+          if (!d || !Array.isArray(d.niches) || !Array.isArray(d.accounts)) {
+            showState(SIMILAR_FAILED, true, true);
+            return;
+          }
+          var want = {};
+          want[SIMILAR_NICHE_KEY] = null;
+          chrome.storage.local.get(want, function (o) {
+            if (!open) return;
+            data = d;
+            fill(o && o[SIMILAR_NICHE_KEY]);
+          });
+        });
+      } catch (e) {
+        showState("Extension worker unavailable — reload the extension.", true, true);
+      }
+    }
+
+    select.addEventListener("change", function () {
+      var o = {};
+      o[SIMILAR_NICHE_KEY] = select.value;
+      try {
+        chrome.storage.local.set(o);
+      } catch (e) {}
+      pickNiche(select.value);
+    });
+    input.addEventListener("input", function () {
+      if (data) renderList();
+    });
+    // Keys typed in the panel are ours, not Instagram's shortcuts.
+    box.addEventListener("keydown", function (ev) {
+      if (ev.key !== "Escape") ev.stopPropagation();
+    });
+
+    document.addEventListener("keydown", onKey, true);
+    (document.body || document.documentElement).appendChild(host);
+    similar = { close: close };
+    x.focus();
+    load();
+  }
+
+  // ---- Progress, while a sort runs ----
+  // A pill at the top of the page with the run's count, and Instagram's grid
+  // dimmed behind it: the collector is scrolling it, and it isn't the result.
+  // The same numbers the popup shows; nothing here changes the run.
+  var PILL_ID = "ig-sorter-progress";
+  var DIM_ATTR = "data-ig-sorter-dim";
+  var progressShown = null; // { collected, target } while the pill is up
+  var waitingForBody = false;
+
+  function dimGrid() {
+    var grid = findGridContainer();
+    if (!grid || grid.hasAttribute(DIM_ATTR)) return;
+    undimGrid();
+    grid.setAttribute(DIM_ATTR, "1");
+  }
+
+  function undimGrid() {
+    Array.prototype.forEach.call(document.querySelectorAll("[" + DIM_ATTR + "]"), function (n) {
+      n.removeAttribute(DIM_ATTR);
+    });
+  }
+
+  function showProgress(collected, target) {
+    progressShown = { collected: collected || 0, target: target || null };
+    // At document_start there's no <body> yet; the pill waits for it.
+    if (!document.body) {
+      if (!waitingForBody) {
+        waitingForBody = true;
+        document.addEventListener("DOMContentLoaded", function () {
+          if (progressShown) showProgress(progressShown.collected, progressShown.target);
+        });
+      }
+      return;
+    }
+    ensureStyles();
+    var pill = document.getElementById(PILL_ID);
+    if (!pill) {
+      pill = ours(el("div", "igs-pill"));
+      pill.id = PILL_ID;
+      pill.setAttribute("role", "status");
+      pill.appendChild(logo());
+      var body = el("div", "igs-pill-body");
+      var line = el("p", "igs-pill-text");
+      line.appendChild(el("b", "", "Collecting reels"));
+      line.appendChild(el("span", "", " — don't scroll"));
+      line.appendChild(el("span", "igs-pill-count"));
+      body.appendChild(line);
+      var bar = el("div", "igs-bar");
+      bar.appendChild(el("i"));
+      body.appendChild(bar);
+      pill.appendChild(body);
+      document.body.appendChild(pill);
+    }
+    var n = progressShown.collected;
+    var t = progressShown.target;
+    pill.querySelector(".igs-pill-count").textContent = n ? " · " + n + " found" : "";
+    var barEl = pill.querySelector(".igs-bar");
+    barEl.classList.toggle("is-open", !t);
+    barEl.querySelector("i").style.width = t ? Math.min(100, Math.round((n / t) * 100)) + "%" : "";
+    dimGrid();
+  }
+
+  function hideProgress() {
+    progressShown = null;
+    var pill = document.getElementById(PILL_ID);
+    if (pill) pill.remove();
+    undimGrid();
   }
 
   // Everything hidden while the sorted grid is up, each with the inline display
@@ -816,6 +1927,12 @@
 
   function teardown() {
     closeDialog();
+    closeSimilar();
+    // The grid a transcription's pill was over is going; the job isn't, and
+    // its transcript still opens when it's ready.
+    hideTxProgress();
+    if (closeExportMenu) closeExportMenu();
+    closeExportMenu = null;
     if (observer) {
       observer.disconnect();
       observer = null;
@@ -1235,6 +2352,7 @@
   // RUN_PROFILE stays: a result still on its way from the collector is then
   // seen to belong to the profile that was left.
   function endRun() {
+    hideProgress();
     teardown();
     LAST = [];
     dropSortState();
@@ -1246,6 +2364,7 @@
   }
 
   function progressState(d) {
+    showProgress(d.collected, d.target);
     // Written when the count moves, and otherwise every few seconds as a
     // heartbeat; every scroll would be a storage write a second.
     if (d.collected === lastStateCount && Date.now() - lastStateWrite < 5000) return;
@@ -1448,11 +2567,47 @@
     }
   }
 
+  // The sort this page load is running or showing, { sortBy, limit, maxReels },
+  // so Similar accounts' Sort reels can run the same one on another profile.
+  var CURRENT_SORT = null;
+
+  // Starts a sort here: the popup's Sort button, or a pending sort from
+  // Similar accounts. o: { sortBy, limit, maxReels, tabId? }. The job waits in
+  // sessionStorage for the reload, which arms the interceptor before
+  // Instagram's first request.
+  function beginSort(o) {
+    // maxReels is set on a Free run only: how many reels it keeps, of any
+    // age. The collector enforces it.
+    var maxReels = o.maxReels > 0 ? o.maxReels : null;
+    var limit = maxReels && (o.limit === "all" || o.limit > maxReels) ? maxReels : o.limit;
+    if (o.tabId !== undefined) TAB_ID = o.tabId;
+    RUN_PROFILE = ownerHere();
+    saveSortState({
+      status: "running",
+      sortBy: o.sortBy,
+      collected: 0,
+      target: limit === "all" ? null : limit,
+      message: "Reloading and collecting reels…"
+    });
+    try {
+      sessionStorage.setItem(
+        "igSorterJob",
+        JSON.stringify({
+          sortBy: o.sortBy, limit: limit, maxReels: maxReels, tabId: TAB_ID,
+          // Free is the plan that sends a cap. For the health log.
+          plan: maxReels ? "free" : "pro"
+        })
+      );
+    } catch (e) {}
+    location.reload();
+  }
+
   // On load: carry on the sort this reload is for, or let the worker end any
   // state this tab had from its last page.
   (function () {
     var job = pendingJob();
     if (job) {
+      CURRENT_SORT = { sortBy: job.sortBy, limit: job.limit, maxReels: job.maxReels || null };
       TAB_ID = job.tabId === undefined ? null : job.tabId;
       RUN_PROFILE = ownerHere();
       watchProfile();
@@ -1463,6 +2618,7 @@
         target: job.limit === "all" ? null : job.limit, // capped by startSort already
         message: "Collecting reels\u2026"
       });
+      showProgress(0, job.limit === "all" ? null : job.limit);
     }
     try {
       chrome.runtime.sendMessage({ type: "pageLoad", loadId: LOAD_ID, keep: !!job }, function (res) {
@@ -1471,6 +2627,7 @@
         if (typeof res.tabId === "number") TAB_ID = res.tabId;
       });
     } catch (e) {}
+    if (!job) takePendingSort();
   })();
 
   // The health log: one entry per sort, newest first, the last LOG_MAX kept
@@ -1566,6 +2723,7 @@
     }
 
     if (d.type === "result") {
+      hideProgress();
       d = forceFailure(d);
       logSort(d);
       // Run off to another profile: nothing of it belongs on this page.
@@ -1598,32 +2756,8 @@
     }
 
     if (msg.type === "startSort") {
-      // maxReels is set on a Free run only: how many reels it keeps, of any
-      // age. The collector enforces it.
-      var maxReels = msg.maxReels > 0 ? msg.maxReels : null;
-      var limit = maxReels && (msg.limit === "all" || msg.limit > maxReels) ? maxReels : msg.limit;
-      if (msg.tabId !== undefined) TAB_ID = msg.tabId;
-      RUN_PROFILE = ownerHere();
-      saveSortState({
-        status: "running",
-        sortBy: msg.sortBy,
-        collected: 0,
-        target: limit === "all" ? null : limit,
-        message: "Reloading and collecting reels\u2026"
-      });
-      try {
-        sessionStorage.setItem(
-          "igSorterJob",
-          JSON.stringify({
-            sortBy: msg.sortBy, limit: limit, maxReels: maxReels, tabId: TAB_ID,
-            // Free is the plan that sends a cap. For the health log.
-            plan: maxReels ? "free" : "pro"
-          })
-        );
-      } catch (e) {}
+      beginSort(msg);
       sendResponse({ ok: true });
-      // Reload so the interceptor is armed before Instagram's first request.
-      location.reload();
       return true;
     }
 

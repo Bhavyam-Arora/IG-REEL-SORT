@@ -1114,3 +1114,182 @@ test("report: the browser, named the backend's way, with its major version", asy
     assertValidReport(r);
   }
 });
+
+// ---- Similar accounts (GET /v1/directory) ----
+
+const DIR_URL = "amazonaws.com/v1/directory";
+const DIRECTORY = {
+  version: 3,
+  niches: [{ name: "Fitness", count: 2, filters: [{ name: "Yoga", count: 1 }, { name: "Strength", count: 1 }] }],
+  accounts: [
+    { niche: "Fitness", username: "amy_yoga", fullName: "Amy Lee", filter: "Yoga", topics: "morning flows" },
+    { niche: "Fitness", username: "zoe.lifts", fullName: "Zoe Park", filter: "Strength", topics: "form tips" }
+  ]
+};
+
+// Objects from the worker's vm, compared as plain data.
+const plain = (x) => JSON.parse(JSON.stringify(x));
+
+// A Pro account whose /v1/directory answers with dir(url) — each URL asked is
+// kept in asked.
+function directoryWorker(dir, opts) {
+  opts = opts || {};
+  const asked = [];
+  const sw = loadWorker(Object.assign({}, opts, {
+    routes: Object.assign({
+      [ME]: me("pro_monthly"),
+      [DIR_URL]: (url, init) => (asked.push({ url, auth: init.headers.Authorization }), dir(url))
+    }, opts.routes)
+  }));
+  sw.asked = asked;
+  return sw;
+}
+
+test("directory: fetched with the sign-in, then kept with its version and time", async () => {
+  const sw = directoryWorker(() => res(200, { body: DIRECTORY }));
+  const r = await sw.send({ type: "directory" });
+  assert.equal(r.ok, true, r.error);
+  assert.deepEqual(plain(r.directory), DIRECTORY);
+  assert.deepEqual(sw.asked.map((a) => a.url), ["https://uc7bn8aln5.execute-api.ap-southeast-2.amazonaws.com/v1/directory"]);
+  assert.equal(sw.asked[0].auth, "Bearer a");
+  assert.equal(sw.local.directory.version, 3);
+  assert.deepEqual(plain(sw.local.directory.data), DIRECTORY);
+  assert.ok(Date.now() - sw.local.directory.at < 1000);
+});
+
+test("directory: within 6 hours the kept copy is used and nothing is fetched", async () => {
+  const sw = directoryWorker(() => res(200, { body: DIRECTORY }), {
+    local: { directory: { version: 3, data: DIRECTORY, at: Date.now() - 5.9 * HOUR } }
+  });
+  const r = await sw.send({ type: "directory" });
+  assert.deepEqual(plain(r.directory), DIRECTORY);
+  assert.deepEqual(sw.asked, []);
+});
+
+test("directory: older than 6 hours, ?have= the kept version; a 304 keeps the copy and restarts the clock", async () => {
+  const sw = directoryWorker(() => res(304), {
+    local: { directory: { version: 3, data: DIRECTORY, at: Date.now() - 6 * HOUR - 1 } }
+  });
+  const r = await sw.send({ type: "directory" });
+  assert.equal(r.ok, true, r.error);
+  assert.deepEqual(plain(r.directory), DIRECTORY);
+  assert.match(sw.asked[0].url, /\/v1\/directory\?have=3$/);
+  assert.ok(Date.now() - sw.local.directory.at < 1000, "fresh again");
+
+  await sw.send({ type: "directory" });
+  assert.equal(sw.asked.length, 1, "and not asked again for another 6 hours");
+});
+
+test("directory: a newer version replaces the kept copy", async () => {
+  const v4 = Object.assign({}, DIRECTORY, { version: 4, accounts: DIRECTORY.accounts.slice(0, 1) });
+  const sw = directoryWorker(() => res(200, { body: v4 }), {
+    local: { directory: { version: 3, data: DIRECTORY, at: Date.now() - 7 * HOUR } }
+  });
+  const r = await sw.send({ type: "directory" });
+  assert.equal(r.directory.version, 4);
+  assert.equal(sw.local.directory.version, 4);
+  assert.equal(sw.local.directory.data.accounts.length, 1);
+});
+
+test("directory: a clock set back doesn't make a copy fresh forever", async () => {
+  const sw = directoryWorker(() => res(304), {
+    local: { directory: { version: 3, data: DIRECTORY, at: Date.now() + 48 * HOUR } }
+  });
+  await sw.send({ type: "directory" });
+  assert.equal(sw.asked.length, 1);
+});
+
+test("directory: 402 not_pro deletes the kept copy and asks for the Upgrade dialog", async () => {
+  const sw = directoryWorker(
+    () => res(402, { body: { error: "Similar accounts are part of Sortcut Pro.", code: "not_pro" } }),
+    { local: { directory: { version: 3, data: DIRECTORY, at: 0 } } }
+  );
+  const r = await sw.send({ type: "directory" });
+  assert.equal(r.ok, false);
+  assert.equal(r.needsPro, true);
+  assert.equal(sw.local.directory, undefined);
+});
+
+test("directory: Free per /v1/me: the kept copy goes and nothing is fetched", async () => {
+  const sw = directoryWorker(() => res(200, { body: DIRECTORY }), {
+    routes: { [ME]: me("free") },
+    local: { directory: { version: 3, data: DIRECTORY, at: Date.now() } }
+  });
+  const r = await sw.send({ type: "directory" });
+  assert.equal(r.needsPro, true);
+  assert.deepEqual(sw.asked, []);
+  assert.equal(sw.local.directory, undefined);
+});
+
+test("directory: signing out deletes the kept copy", async () => {
+  const sw = directoryWorker(() => res(200, { body: DIRECTORY }), {
+    routes: { "/v1/auth/logout": () => res(204) },
+    local: { directory: { version: 3, data: DIRECTORY, at: Date.now() } }
+  });
+  const r = await sw.fromPopup({ type: "signOut" });
+  assert.equal(r.ok, true, r.error);
+  assert.equal(sw.local.directory, undefined);
+  assert.equal(sw.local.auth, undefined);
+});
+
+test("directory: a session that can't be refreshed deletes it too", async () => {
+  const sw = directoryWorker(() => res(401, { body: { error: "Please sign in again." } }), {
+    routes: { "/v1/auth/refresh": () => res(401, { body: { error: "expired" } }) },
+    local: { directory: { version: 3, data: DIRECTORY, at: 0 } }
+  });
+  const r = await sw.send({ type: "directory" });
+  assert.equal(r.signedOut, true);
+  assert.equal(sw.local.directory, undefined);
+});
+
+test("directory: signed out, nothing is fetched and a leftover copy goes", async () => {
+  const sw = directoryWorker(() => res(200, { body: DIRECTORY }), {
+    signedIn: false,
+    local: { directory: { version: 3, data: DIRECTORY, at: Date.now() } }
+  });
+  const r = await sw.send({ type: "directory" });
+  assert.equal(r.ok, false);
+  assert.equal(r.signedOut, true);
+  assert.equal(sw.calls.filter((u) => u.includes("/v1/")).length, 0);
+  assert.equal(sw.local.directory, undefined);
+});
+
+test("directory: nothing published, or a failure, in plain words; never an HTTP code", async () => {
+  const none = directoryWorker(() => res(404, { body: { error: "Not found" } }));
+  assert.equal((await none.send({ type: "directory" })).error, "There are no similar accounts to show yet.");
+
+  for (const reply of [() => res(500, { body: { error: "x" } }), () => res(200, { body: { version: "3" } })]) {
+    const sw = directoryWorker(reply);
+    const r = await sw.send({ type: "directory" });
+    assert.equal(r.error, "Couldn't load similar accounts. Please try again.");
+    assert.equal(sw.local.directory, undefined, "nothing kept");
+  }
+});
+
+test("directory: an account whose username can't make a link is left out", async () => {
+  const dirty = Object.assign({}, DIRECTORY, {
+    accounts: DIRECTORY.accounts.concat([
+      { niche: "Fitness", username: "../x", fullName: "", filter: "Yoga", topics: "" },
+      { niche: "Fitness", username: "a".repeat(31), fullName: "", filter: "Yoga", topics: "" },
+      { niche: "Fitness", username: 42, fullName: "", filter: "Yoga", topics: "" },
+      { niche: "", username: "noniche", fullName: "", filter: "Yoga", topics: "" }
+    ])
+  });
+  const sw = directoryWorker(() => res(200, { body: dirty }));
+  const r = await sw.send({ type: "directory" });
+  assert.deepEqual(plain(r.directory.accounts.map((a) => a.username)), ["amy_yoga", "zoe.lifts"]);
+});
+
+test("directory: two asks at once make one request", async () => {
+  const sw = directoryWorker(() => res(200, { body: DIRECTORY }));
+  const [a, b] = await Promise.all([sw.send({ type: "directory" }), sw.send({ type: "directory" })]);
+  assert.equal(a.ok && b.ok, true);
+  assert.equal(sw.asked.length, 1);
+});
+
+test("isPro: the page's question, answered from /v1/me", async () => {
+  assert.deepEqual(plain(await directoryWorker(() => res(500)).send({ type: "isPro" })), { ok: true, pro: true });
+  const free = directoryWorker(() => res(500), { routes: { [ME]: me("free") } });
+  assert.deepEqual(plain(await free.send({ type: "isPro" })), { ok: true, pro: false });
+  assert.deepEqual(plain(await loadWorker({ signedIn: false }).send({ type: "isPro" })), { ok: true, pro: false });
+});

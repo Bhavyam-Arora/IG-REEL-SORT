@@ -1044,6 +1044,127 @@ chrome.storage.session.get(SHEETS_KEY).then(function (o) {
   });
 }).catch(function () {});
 
+// ---- Similar accounts ----
+// The curated list of creators by niche (decisions.md §14), Pro only: GET
+// /v1/directory answers 401 signed out and 402 not_pro on Free. The reply is
+// kept in chrome.storage.local (DIRECTORY_KEY, lib/auth.js) as
+// { version, data, at }. The page asks for it when its panel opens; a copy
+// younger than DIRECTORY_REFRESH_MS is used as it is, an older one is checked
+// with ?have=, which costs a 304 and no body while it's still the live
+// version. Signing out (clearAuth) and a not_pro answer delete it, and it's
+// only handed to a signed-in Pro account.
+//
+// Display text only, and untrusted: content.js renders every field with
+// textContent, and builds links only from a username that passed
+// DIRECTORY_USERNAME here.
+var DIRECTORY_PATH = "/v1/directory";
+var DIRECTORY_REFRESH_MS = 6 * 60 * 60 * 1000;
+var DIRECTORY_USERNAME = /^[A-Za-z0-9._]{1,30}$/;
+var DIRECTORY_TEXT_MAX = 300;
+var DIRECTORY_FAILED = "Couldn't load similar accounts. Please try again.";
+var DIRECTORY_NONE = "There are no similar accounts to show yet.";
+var DIRECTORY_NEEDS_PRO = "Similar accounts is part of Sortcut Pro.";
+
+function directoryNeedsPro() {
+  var err = new Error(DIRECTORY_NEEDS_PRO);
+  err.needsPro = true;
+  return err;
+}
+
+function directoryText(v) {
+  return typeof v === "string" ? v.trim().slice(0, DIRECTORY_TEXT_MAX) : "";
+}
+
+function directoryCount(v) {
+  return Number.isInteger(v) && v >= 0 ? v : 0;
+}
+
+// The fields the panel shows, from a 200 reply, or null when it isn't a
+// directory. An account without a valid username or a niche is left out.
+function cleanDirectory(d) {
+  if (!d || typeof d !== "object" || !Number.isInteger(d.version)) return null;
+  if (!Array.isArray(d.niches) || !Array.isArray(d.accounts)) return null;
+  var niches = d.niches.filter(function (n) {
+    return n && directoryText(n.name);
+  }).map(function (n) {
+    return {
+      name: directoryText(n.name),
+      count: directoryCount(n.count),
+      filters: (Array.isArray(n.filters) ? n.filters : []).filter(function (f) {
+        return f && directoryText(f.name);
+      }).map(function (f) {
+        return { name: directoryText(f.name), count: directoryCount(f.count) };
+      })
+    };
+  });
+  var accounts = d.accounts.filter(function (a) {
+    return a && typeof a.username === "string" && DIRECTORY_USERNAME.test(a.username) && directoryText(a.niche);
+  }).map(function (a) {
+    return {
+      niche: directoryText(a.niche),
+      username: a.username,
+      fullName: directoryText(a.fullName),
+      filter: directoryText(a.filter),
+      topics: directoryText(a.topics)
+    };
+  });
+  return { version: d.version, niches: niches, accounts: accounts };
+}
+
+function dropDirectory() {
+  return chrome.storage.local.remove(DIRECTORY_KEY);
+}
+
+// One load at a time: the panel opened in two tabs asks once.
+var directoryLoad = null;
+function loadDirectory() {
+  if (!directoryLoad) {
+    directoryLoad = fetchDirectory().finally(function () {
+      directoryLoad = null;
+    });
+  }
+  return directoryLoad;
+}
+
+async function fetchDirectory() {
+  if (!(await getAuth())) {
+    await dropDirectory();
+    throw signedOutError();
+  }
+  // The server is the real check on every fetch; this one keeps a cached copy
+  // from outliving the plan it was downloaded on.
+  if (!(await isPro())) {
+    await dropDirectory();
+    throw directoryNeedsPro();
+  }
+
+  var now = Date.now();
+  var cached = (await chrome.storage.local.get({ [DIRECTORY_KEY]: null }))[DIRECTORY_KEY];
+  var held = cached && cached.data && Number.isInteger(cached.data.version) ? cached : null;
+  // A time ahead of the clock (the clock was set back) doesn't count as fresh.
+  if (held && typeof held.at === "number" && held.at <= now && now - held.at < DIRECTORY_REFRESH_MS) {
+    return held.data;
+  }
+
+  var res = await api(DIRECTORY_PATH + (held ? "?have=" + encodeURIComponent(held.data.version) : ""));
+  if (res.status === 304 && held) {
+    await chrome.storage.local.set({ [DIRECTORY_KEY]: { version: held.data.version, data: held.data, at: now } });
+    return held.data;
+  }
+  if (serverCode(res) === "not_pro") {
+    await dropDirectory();
+    throw directoryNeedsPro();
+  }
+  if (res.status === 404) throw new Error(DIRECTORY_NONE);
+  var data = res.status === 200 ? cleanDirectory(res.data) : null;
+  if (!data) {
+    console.warn("[GridSorter] similar accounts: not loaded (HTTP " + res.status + ")");
+    throw new Error(DIRECTORY_FAILED);
+  }
+  await chrome.storage.local.set({ [DIRECTORY_KEY]: { version: data.version, data: data, at: now } });
+  return data;
+}
+
 async function account() {
   var a;
   if (!(await getAuth())) {
@@ -1112,6 +1233,14 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
   }
   if (msg.type === "pageSignIn") {
     return reply(signIn(), sendResponse, function () { return { ok: true }; });
+  }
+  // The results header asks whether to show Similar accounts; the panel asks
+  // for the list when it opens.
+  if (msg.type === "isPro") {
+    return reply(isPro(), sendResponse, function (pro) { return { ok: true, pro: pro }; });
+  }
+  if (msg.type === "directory") {
+    return reply(loadDirectory(), sendResponse, function (d) { return { ok: true, directory: d }; });
   }
   // Every page load in an Instagram tab. A load that carries on a sort the
   // popup just started (keep) re-stamps the state itself; any other load ends
