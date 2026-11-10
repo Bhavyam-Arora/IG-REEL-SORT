@@ -83,7 +83,63 @@ function applyPlan(p) {
   else if (!plan.pro && !freeDepth($("limit").value)) $("limit").value = deepestFreeLimit();
 
   $("upgrade").hidden = plan.pro;
+  $("planPill").textContent = plan.pro ? "Pro" : "Free";
+  $("planPill").classList.toggle("pro", plan.pro);
+  showChoices();
 }
+
+// ---- The menus as shown ----
+// The two <select>s stay the source of truth (the plan locks their options,
+// the sort reads them); the Sort by list and the depth segments only mirror
+// them, and a click on one sets its <select> the way a pick in it would.
+function chooserButtons(id) {
+  return Array.prototype.slice.call($(id).querySelectorAll("button"));
+}
+
+function mirror(selectId, listId) {
+  var select = $(selectId);
+  chooserButtons(listId).forEach(function (b) {
+    var o = select.querySelector('option[value="' + b.getAttribute("data-value") + '"]');
+    var on = !!o && select.value === o.value;
+    b.disabled = !o || o.disabled;
+    b.title = b.disabled ? "Pro" : "";
+    b.setAttribute("aria-checked", String(on));
+    // One tab stop per group; arrow keys move within it.
+    b.setAttribute("tabindex", on ? "0" : "-1");
+  });
+}
+
+function showChoices() {
+  mirror("sortBy", "sortList");
+  mirror("limit", "limitSeg");
+  var o = $("limit").querySelector('option[value="' + $("limit").value + '"]');
+  $("limitHint").textContent = o ? o.getAttribute("data-label") || o.textContent : "";
+}
+
+function chooser(selectId, listId, onPick) {
+  function pick(b) {
+    if (!b || b.disabled) return;
+    $(selectId).value = b.getAttribute("data-value");
+    if (onPick) onPick();
+    showChoices();
+  }
+  $(listId).addEventListener("click", function (ev) {
+    pick(ev.target.closest && ev.target.closest("button"));
+  });
+  $(listId).addEventListener("keydown", function (ev) {
+    var step = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[ev.key];
+    if (!step) return;
+    ev.preventDefault();
+    var open = chooserButtons(listId).filter(function (b) { return !b.disabled; });
+    var next = open[(open.indexOf(document.activeElement) + step + open.length) % open.length];
+    pick(next);
+    if (next) next.focus();
+  });
+  $(selectId).addEventListener("change", showChoices);
+}
+
+chooser("sortBy", "sortList");
+chooser("limit", "limitSeg", function () { limitPicked = true; });
 
 applyPlan(plan);
 
@@ -321,15 +377,16 @@ $("go").addEventListener("click", function () {
 // content.js keeps the latest outcome in storage, word for word what the page
 // showed on the reel, because clicking a tile on the page closes the popup
 // before the result comes back. Older than this, it's no longer news.
+// Only a failure shows here: a finished transcript is the page's card, and
+// the popup may be opened long after, on another page.
 var TX_FRESH_MS = 30 * 60 * 1000;
 
 function showTranscribeStatus(t) {
   var el = $("txStatus");
-  var show = !!(t && t.text && Date.now() - (t.at || 0) < TX_FRESH_MS);
+  var show = !!(t && t.text && t.ok !== true && Date.now() - (t.at || 0) < TX_FRESH_MS);
   el.textContent = show ? t.text : "";
   el.hidden = !show;
-  el.classList.toggle("good", show && t.ok === true);
-  el.classList.toggle("bad", show && t.ok !== true);
+  el.classList.toggle("bad", show);
 }
 
 chrome.storage.local.get({ transcribeStatus: null }, function (o) {
@@ -409,8 +466,6 @@ $("sheetsCsv").addEventListener("click", function () { doExport("csv"); });
 // server side, so a stored one is just a secret sitting in storage.
 chrome.storage.local.remove("groqKey");
 
-var PLAN_LABEL = { none: "Free", pro_monthly: "Pro Monthly", pro_yearly: "Pro Yearly" };
-
 // periodEnd is UTC midnight; read in local time it can show as the day before.
 function fmtDate(iso) {
   var d = new Date(iso);
@@ -430,19 +485,32 @@ function accountNote(text) {
   $("accountNote").hidden = !text;
 }
 
+// The avatar's letter: the first letter (or digit) of the name, else of the
+// email, uppercased. "?" when there's neither.
+function firstLetter(s) {
+  var m = /[\p{L}\p{N}]/u.exec(typeof s === "string" ? s : "");
+  return m ? m[0].toUpperCase() : "";
+}
+
+function avatarInitial(me) {
+  me = me || {};
+  return firstLetter(me.name) || firstLetter(me.email) || "?";
+}
+
 function renderAccount(a) {
   var signedIn = !!(a && a.signedIn);
-  $("signedOut").hidden = signedIn;
+  $("signIn").hidden = signedIn;
   $("signedIn").hidden = !signedIn;
+  if (!signedIn) menuOpen(false);
   accountNote(a && a.error);
   applyPlan(a || {});
   if (!signedIn) return;
 
   var me = a.me || {};
   var pro = !!a.pro;
+  $("avatar").textContent = avatarInitial(me);
+  $("avatar").title = me.email || "";
   $("email").textContent = me.email || "";
-  // a.plan is the worker's answer, which outlasts /v1/me being unreachable.
-  $("plan").textContent = PLAN_LABEL[a.plan] || "Free";
 
   var q = me.quota;
   var usage = "";
@@ -455,11 +523,36 @@ function renderAccount(a) {
   $("usage").hidden = !usage;
 }
 
+// ---- The avatar's menu ----
+// A small card over the popup: who's signed in, Manage account, Sign out.
+// Closes on a click anywhere else, on Esc, or once an item is used.
+function menuOpen(on) {
+  $("acctMenu").hidden = !on;
+  $("avatar").setAttribute("aria-expanded", String(!!on));
+}
+
+$("avatar").addEventListener("click", function () {
+  menuOpen($("acctMenu").hidden);
+});
+
+document.addEventListener("click", function (ev) {
+  if (!$("acctMenu").hidden && !$("signedIn").contains(ev.target)) menuOpen(false);
+});
+
+document.addEventListener("keydown", function (ev) {
+  if (ev.key !== "Escape" || $("acctMenu").hidden) return;
+  ev.preventDefault();
+  menuOpen(false);
+  $("avatar").focus();
+});
+
+$("manage").addEventListener("click", function () { menuOpen(false); });
+
 // The worker owns sign-in and every backend call; the popup only asks it.
 function accountCall(type) {
   chrome.runtime.sendMessage({ type: type }, function (res) {
     $("signIn").disabled = false;
-    $("signIn").textContent = "Sign in with Google";
+    $("signIn").textContent = "Sign in";
     $("signOut").disabled = false;
     if (chrome.runtime.lastError || !res) {
       accountNote("Extension worker unavailable \u2014 reload the extension.");

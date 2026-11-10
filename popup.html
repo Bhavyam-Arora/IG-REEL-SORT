@@ -2,23 +2,32 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <link rel="stylesheet" href="lib/tokens.css" />
   <link rel="stylesheet" href="popup.css" />
 </head>
-<body>
+<body data-sortcut>
   <header class="head">
-    <div class="ranks" id="ranks" aria-hidden="true">
-      <i></i><i></i><i></i>
-    </div>
-    <div class="titles">
-      <h1>Sortcut</h1>
-      <p class="sub">Instagram research</p>
-    </div>
+    <!-- id="ranks": popup.js marks it .working while a sort runs. -->
+    <span class="logo" id="ranks" aria-hidden="true"><img src="icons/128.png" alt="" width="28" height="28"></span>
+    <span class="brand">Sortcut</span>
+    <span id="planPill" class="pill">Free</span>
   </header>
 
+  <!-- The signed rules' notice, if any. Set with textContent only. -->
+  <p id="rulesNotice" class="notice" role="note" hidden></p>
+
   <main>
-    <label class="field">
-      <span class="lbl">Rank by</span>
-      <select id="sortBy">
+    <!-- Anywhere but a Reels tab: this, and none of the sort controls. -->
+    <section class="empty" aria-live="polite">
+      <img class="empty-logo" src="icons/128.png" alt="" width="48" height="48">
+      <div id="pageNote" class="empty-text" role="alert" hidden></div>
+    </section>
+
+    <div class="sorter">
+      <p class="lbl" id="sortByLbl">Sort by</p>
+      <!-- The menus popup.js reads and the plan locks; the list and the
+           segments below are how they're shown and chosen. -->
+      <select id="sortBy" hidden>
         <option value="views">Views</option>
         <option value="outlier">Outlier score &middot; views</option>
         <option value="likes">Likes</option>
@@ -26,11 +35,20 @@
         <option value="comments">Comments</option>
         <option value="outlierComments">Outlier score &middot; comments</option>
       </select>
-    </label>
+      <div class="choices" id="sortList" role="radiogroup" aria-labelledby="sortByLbl">
+        <button type="button" class="choice" role="radio" data-value="views"><span class="ico ico-views"></span><span class="choice-name">Views</span><span class="tag">Pro</span><span class="check"></span></button>
+        <button type="button" class="choice" role="radio" data-value="likes"><span class="ico ico-likes"></span><span class="choice-name">Likes</span><span class="tag">Pro</span><span class="check"></span></button>
+        <button type="button" class="choice" role="radio" data-value="comments"><span class="ico ico-comments"></span><span class="choice-name">Comments</span><span class="tag">Pro</span><span class="check"></span></button>
+        <button type="button" class="choice" role="radio" data-value="outlier"><span class="ico ico-outlier"></span><span class="choice-name">Outlier &middot; views</span><span class="tag">Pro</span><span class="check"></span></button>
+        <button type="button" class="choice" role="radio" data-value="outlierLikes"><span class="ico ico-outlier"></span><span class="choice-name">Outlier &middot; likes</span><span class="tag">Pro</span><span class="check"></span></button>
+        <button type="button" class="choice" role="radio" data-value="outlierComments"><span class="ico ico-outlier"></span><span class="choice-name">Outlier &middot; comments</span><span class="tag">Pro</span><span class="check"></span></button>
+      </div>
 
-    <label class="field">
-      <span class="lbl">Depth</span>
-      <select id="limit">
+      <div class="lbl-row">
+        <p class="lbl" id="limitLbl">How many reels</p>
+        <p id="limitHint" class="hint"></p>
+      </div>
+      <select id="limit" hidden>
         <option value="25">25 reels &middot; fast</option>
         <option value="50">50 reels</option>
         <option value="100" selected>100 reels</option>
@@ -38,11 +56,18 @@
         <option value="300">300 reels &middot; slow</option>
         <option value="all">All reels &middot; slowest</option>
       </select>
-    </label>
+      <div class="seg" id="limitSeg" role="radiogroup" aria-labelledby="limitLbl">
+        <button type="button" role="radio" data-value="25">25</button>
+        <button type="button" role="radio" data-value="50">50</button>
+        <button type="button" role="radio" data-value="100">100</button>
+        <button type="button" role="radio" data-value="200">200</button>
+        <button type="button" role="radio" data-value="300">300</button>
+        <button type="button" role="radio" data-value="all">All</button>
+      </div>
 
-    <button id="go" class="primary">Sort reels</button>
+      <button id="go" class="primary">Sort this profile</button>
+    </div>
 
-    <div id="pageNote" class="status bad" role="alert" hidden></div>
     <div id="status" class="status" role="status" hidden></div>
     <!-- Joined to the status card below a failed sort. Nothing is sent unless Send report is clicked. -->
     <div id="report" class="status bad report" role="group" aria-label="Error report" hidden>
@@ -50,8 +75,8 @@
       <div id="reportAsk">
         <p>Send an anonymous error report? It only includes the error type, version numbers and browser &mdash; no profile names or data.</p>
         <div class="report-actions">
-          <button id="reportSend" class="ghost">Send report</button>
-          <button id="reportNo" class="ghost">No thanks</button>
+          <button id="reportSend" class="secondary dark">Send report</button>
+          <button id="reportNo" class="secondary">No thanks</button>
         </div>
         <button id="reportWhat" class="link" aria-expanded="false">What's sent?</button>
         <pre id="reportBody" class="report-body" hidden></pre>
@@ -60,52 +85,51 @@
     </div>
     <div id="txStatus" class="status" role="status" hidden></div>
 
-    <div class="exports">
-      <button id="csv" class="ghost" disabled>Export CSV</button>
-      <button id="json" class="ghost" disabled>Export JSON</button>
-      <button id="xlsx" class="ghost" disabled>Export Excel</button>
-      <button id="sheets" class="ghost wide" disabled>Export to Google Sheets</button>
-    </div>
-    <div id="sheetsStatus" class="status" role="status" hidden></div>
-    <button id="sheetsCsv" class="link" hidden>Download CSV instead</button>
+    <section class="exports-box" aria-labelledby="exportsLbl">
+      <p class="lbl" id="exportsLbl">Export</p>
+      <div class="exports">
+        <button id="csv" class="secondary" disabled>Export CSV</button>
+        <button id="json" class="secondary" disabled>Export JSON</button>
+        <button id="xlsx" class="secondary" disabled>Export Excel</button>
+        <button id="sheets" class="secondary wide" disabled>Export to Google Sheets</button>
+      </div>
+      <div id="sheetsStatus" class="status" role="status" hidden></div>
+      <button id="sheetsCsv" class="link" hidden>Download CSV instead</button>
+    </section>
 
     <button id="restore" class="link" hidden>Restore original grid</button>
 
-    <section class="account" aria-label="Account">
-      <span class="lbl">Account</span>
-      <div id="signedOut" hidden>
-        <button id="signIn" class="ghost">Sign in with Google</button>
-      </div>
-      <div id="signedIn" hidden>
-        <div class="who">
-          <span id="email" class="mono"></span>
-          <span id="plan" class="plan"></span>
-        </div>
-        <p id="usage" class="dim" hidden></p>
-        <button id="signOut" class="link">Sign out</button>
-      </div>
-      <!-- The popup's one way to Pro, for anyone not on it, signed in or not. -->
-      <a id="upgrade" class="upgrade" href="https://sortcut.co/pricing.html" target="_blank" rel="noopener" hidden>Upgrade to Pro</a>
-      <p id="accountNote" class="dim" role="status" hidden></p>
-    </section>
-
     <!-- Developer capture: shown only when storage has devCapture: true. See README. -->
-    <button id="debugSample" class="ghost" hidden>Save debug sample</button>
-
-    <details class="tools">
-      <summary>Transcription</summary>
-      <p class="dim">
-        Reels you transcribe are sent to Sortcut and Groq to be transcribed, and
-        deleted after processing.
-      </p>
-    </details>
+    <button id="debugSample" class="secondary" hidden>Save debug sample</button>
   </main>
 
   <footer>
-    <!-- The signed rules' notice, if any. Set with textContent only. -->
-    <p id="rulesNotice" class="notice" role="note" hidden></p>
-    <p>Sorting runs entirely in your browser.</p>
-    <p class="dim">Not affiliated with or endorsed by Instagram.</p>
+    <div class="foot-text">
+      <section class="account" aria-label="Account">
+        <!-- The popup's one way to Pro, for anyone not on it, signed in or not. -->
+        <a id="upgrade" class="upgrade" href="https://sortcut.co/pricing.html" target="_blank" rel="noopener" hidden>Upgrade to Pro</a>
+        <p id="accountNote" class="dim" role="status" hidden></p>
+      </section>
+
+      <p class="fine">Sorting runs entirely in your browser. Not affiliated with or endorsed by Instagram.</p>
+      <p class="fine">Reels you transcribe are sent to Sortcut and our transcription provider (Groq) to create the text, then deleted.</p>
+    </div>
+
+    <!-- Bottom right: Sign in, or the account avatar and its menu. -->
+    <div class="me">
+      <button id="signIn" class="secondary signin" hidden>Sign in</button>
+      <div id="signedIn" class="avatar-wrap" hidden>
+        <button id="avatar" class="avatar" type="button" aria-expanded="false" aria-controls="acctMenu" aria-label="Account"></button>
+        <div id="acctMenu" class="acct-menu" hidden>
+          <div class="acct-who">
+            <p id="email" class="acct-email"></p>
+            <p id="usage" class="acct-usage" hidden></p>
+          </div>
+          <a id="manage" class="acct-item" href="https://accounts.sortcut.co" target="_blank" rel="noopener">Manage account</a>
+          <button id="signOut" class="acct-item" type="button">Sign out</button>
+        </div>
+      </div>
+    </div>
   </footer>
 
   <!-- For the shared reels-tab URL check; the extractor itself goes unused here. -->

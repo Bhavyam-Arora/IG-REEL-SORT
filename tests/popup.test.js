@@ -54,7 +54,12 @@ function loadPopup(opts) {
   const account = () => {
     const signedIn = opts.signedIn !== false;
     return Object.assign(
-      { signedIn, me: signedIn ? { email: "test@example.com", plan: plan().plan, quota: opts.quota } : undefined },
+      {
+        signedIn,
+        me: signedIn
+          ? Object.assign({ email: "test@example.com", plan: plan().plan, quota: opts.quota }, opts.me)
+          : undefined
+      },
       plan()
     );
   };
@@ -127,6 +132,7 @@ function loadPopup(opts) {
     status: () => ($("status").hidden ? null : $("status").textContent),
     answerSend: (reply) => pendingSends.splice(0).forEach((cb) => cb(reply)),
     click: (id) => $(id).dispatchEvent({ type: "click" }),
+    key: (key) => document.dispatchEvent({ type: "keydown", key }),
     text: () => document.body.textContent
   };
 }
@@ -457,6 +463,102 @@ test("Google Sheets: reopening the popup shows the outcome of an export it start
 
 // ---- Account ----
 
+test("avatar: the first letter of the name, uppercase; the email's when there's no name", () => {
+  const initial = (me) => loadPopup({ me }).$("avatar").textContent;
+  assert.equal(initial({ name: "bhavya Arora", email: "kc@example.com" }), "B");
+  assert.equal(initial({ name: "  Émile", email: "kc@example.com" }), "É");
+  assert.equal(initial({ email: "kartik@example.com" }), "K");
+  assert.equal(initial({ name: "", email: "zed@example.com" }), "Z");
+  assert.equal(initial({ name: null, email: "9lives@example.com" }), "9");
+  assert.equal(initial({ email: "" }), "?");
+});
+
+test("account: no footer line; signed in is the avatar alone, signed out a small Sign in button", () => {
+  const inP = loadPopup({ pro: true });
+  assert.equal(inP.$("plan"), null, "no plan name line");
+  assert.equal(inP.$("signedIn").hidden, false);
+  assert.equal(inP.$("signIn").hidden, true);
+  assert.equal(inP.$("acctMenu").hidden, true, "menu closed until clicked");
+  assert.ok(!/test@example\.com/.test(inP.text().replace(inP.$("acctMenu").textContent, "")),
+    "the email shows only in the menu");
+  assert.equal(inP.$("planPill").textContent, "Pro");
+  assert.match(inP.text(), /Sorting runs entirely in your browser/);
+  assert.match(inP.text(), /Reels you transcribe are sent to Sortcut and our transcription provider \(Groq\) to create the text, then deleted\./,
+    "the transcription data notice");
+
+  const out = loadPopup({ signedIn: false });
+  assert.equal(out.$("signedIn").hidden, true);
+  assert.equal(out.$("signIn").hidden, false);
+  assert.equal(out.$("signIn").textContent, "Sign in");
+  assert.ok(out.$("signIn").classList.contains("secondary"));
+  out.click("signIn");
+  assert.ok(out.toWorker.some((m) => m.type === "signIn"), "the existing sign-in");
+});
+
+test("avatar menu: email, Pro usage, Manage account and Sign out; closes on outside click and Esc", () => {
+  const p = loadPopup({ pro: true, quota: { used: 12, limit: 200, periodEnd: "2026-11-24T00:00:00Z" } });
+  const menu = p.$("acctMenu");
+  p.click("avatar");
+  assert.equal(menu.hidden, false);
+  assert.equal(p.$("avatar").getAttribute("aria-expanded"), "true");
+  assert.equal(p.$("email").textContent, "test@example.com");
+  // The date in the browser's own locale, as before.
+  assert.match(p.$("usage").textContent, /^12 of 200 transcripts used · resets (24 Nov|Nov 24),? 2026$/);
+  const manage = p.$("manage");
+  assert.equal(manage.href, "https://accounts.sortcut.co");
+  assert.equal(manage.getAttribute("target"), "_blank");
+  assert.equal(manage.textContent, "Manage account");
+  assert.equal(p.$("signOut").textContent, "Sign out");
+
+  // A click inside stays open; outside closes.
+  p.click("email");
+  assert.equal(menu.hidden, false);
+  p.click("go");
+  assert.equal(menu.hidden, true);
+  assert.equal(p.$("avatar").getAttribute("aria-expanded"), "false");
+
+  p.click("avatar");
+  p.click("avatar");
+  assert.equal(menu.hidden, true, "the avatar toggles it");
+  p.click("avatar");
+  p.key("Escape");
+  assert.equal(menu.hidden, true);
+
+  // Sign out: the existing action, and the menu and avatar go.
+  p.click("avatar");
+  p.setPlan({ pro: false, signedIn: false });
+  p.click("signOut");
+  assert.ok(p.toWorker.some((m) => m.type === "signOut"));
+  assert.equal(menu.hidden, true);
+  assert.equal(p.$("signedIn").hidden, true);
+  assert.equal(p.$("signIn").hidden, false);
+});
+
+test("avatar menu: Free has no usage line", () => {
+  const p = loadPopup({ pro: false, quota: { used: 1, limit: 5, periodEnd: "2026-11-24T00:00:00Z" } });
+  p.click("avatar");
+  assert.equal(p.$("usage").hidden, true);
+  assert.equal(p.$("email").textContent, "test@example.com");
+});
+
+test("transcription: a finished transcript never shows in the popup; a failure still does", () => {
+  const at = Date.now();
+  const ready = loadPopup({ store: { transcribeStatus: { ok: true, code: "R1", text: "Transcript ready (English).", at } } });
+  assert.equal(ready.$("txStatus").hidden, true);
+  assert.doesNotMatch(ready.text(), /Transcript ready/);
+  // Nor on another page.
+  const elsewhere = loadPopup({
+    url: "https://www.instagram.com/",
+    store: { transcribeStatus: { ok: true, code: "R1", text: "Transcript ready (English).", at } }
+  });
+  assert.doesNotMatch(elsewhere.text(), /Transcript ready/);
+
+  const failed = loadPopup({ store: { transcribeStatus: { ok: false, code: "R1", text: "Transcription failed.", at } } });
+  assert.equal(failed.$("txStatus").hidden, false);
+  assert.equal(failed.$("txStatus").textContent, "Transcription failed.");
+  assert.ok(failed.$("txStatus").classList.contains("bad"));
+});
+
 test("Pro usage line: counts with thousands separators", () => {
   const p = loadPopup({
     pro: true,
@@ -577,4 +679,71 @@ test("report: a new sort starting takes the question away", () => {
   p.setPing({ loadId: "L2" });
   p.state(here({ loadId: "L2", status: "running", message: "Collecting reels…" }));
   assert.equal(p.$("report").hidden, true);
+});
+
+// ---- The Sort by list, the depth segments and the plan pill ----
+// They only show the two menus above and pick in them.
+
+const rows = (p, id) => p.$(id).querySelectorAll("button");
+const row = (p, id, value) => rows(p, id).find((b) => b.getAttribute("data-value") === value);
+const checked = (p, id) => rows(p, id).filter((b) => b.getAttribute("aria-checked") === "true").map((b) => b.getAttribute("data-value"));
+
+test("list: Views, Likes, Comments, then the outlier sorts; Free's Pro rows locked, Pro's open", () => {
+  const free = loadPopup({ pro: false });
+  assert.deepEqual(rows(free, "sortList").map((b) => b.getAttribute("data-value")),
+    ["views", "likes", "comments", ...OUTLIERS]);
+  assert.deepEqual(rows(free, "sortList").filter((b) => b.disabled).map((b) => b.getAttribute("data-value")), OUTLIERS);
+  assert.deepEqual(checked(free, "sortList"), ["views"]);
+  assert.deepEqual(rows(free, "limitSeg").filter((b) => b.disabled).map((b) => b.getAttribute("data-value")), DEEP);
+  assert.deepEqual(checked(free, "limitSeg"), ["50"]);
+  assert.equal(free.$("planPill").textContent, "Free");
+  assert.ok(!free.$("planPill").classList.contains("pro"));
+
+  const pro = loadPopup({ pro: true });
+  assert.ok(rows(pro, "sortList").concat(rows(pro, "limitSeg")).every((b) => !b.disabled));
+  assert.deepEqual(checked(pro, "limitSeg"), ["100"]);
+  assert.equal(pro.$("planPill").textContent, "Pro");
+  assert.ok(pro.$("planPill").classList.contains("pro"));
+});
+
+test("list: a click picks in the menu, and that is what the sort starts with", () => {
+  const p = loadPopup({ pro: true });
+  row(p, "sortList", "outlierComments").click();
+  row(p, "limitSeg", "300").click();
+  assert.equal(p.$("sortBy").value, "outlierComments");
+  assert.deepEqual(checked(p, "sortList"), ["outlierComments"]);
+  assert.deepEqual(checked(p, "limitSeg"), ["300"]);
+  assert.equal(p.$("limitHint").textContent, "300 reels · slow");
+  p.$("go").click();
+  assert.deepEqual({ ...p.starts()[0] }, {
+    type: "startSort", sortBy: "outlierComments", limit: 300, maxReels: null, tabId: 7
+  });
+});
+
+test("list: on Free a locked row or segment can't be picked", () => {
+  const p = loadPopup({ pro: false });
+  row(p, "sortList", "outlier").click();
+  row(p, "limitSeg", "all").click();
+  assert.equal(p.$("sortBy").value, "views");
+  assert.equal(p.$("limit").value, "50");
+  assert.deepEqual(checked(p, "sortList"), ["views"]);
+});
+
+test("segments: a depth clicked counts as picked by hand, kept when signing in to Pro", () => {
+  const p = loadPopup({ pro: false, signedIn: false });
+  row(p, "limitSeg", "25").click();
+  p.setPlan({ pro: true, signedIn: true });
+  p.$("signIn").click();
+  assert.equal(p.$("limit").value, "25");
+  assert.deepEqual(checked(p, "limitSeg"), ["25"]);
+});
+
+test("list: a plan change that moves a choice moves the check with it", () => {
+  const p = loadPopup({ pro: true });
+  row(p, "sortList", "outlierLikes").click();
+  p.setPlan({ pro: false, signedIn: false });
+  p.$("signOut").click();
+  assert.deepEqual(checked(p, "sortList"), ["likes"]);
+  assert.deepEqual(checked(p, "limitSeg"), ["50"]);
+  assert.equal(p.$("planPill").textContent, "Free");
 });
