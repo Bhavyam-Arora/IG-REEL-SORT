@@ -1560,7 +1560,7 @@ test("similar accounts: loading skeleton, then this profile's niche, A to Z, wit
   const select = root.querySelector("select");
   assert.equal(select.value, "Fitness", "the niche of @demo, the profile this page is on");
   assert.deepEqual(select.querySelectorAll("option").map((o) => o.textContent), ["Fitness (3)", "Food (2)"]);
-  assert.deepEqual(chipsOf(root), [["All3", "true"], ["Yoga1", "false"], ["Strength2", "false"]]);
+  assert.deepEqual(chipsOf(root), [["All3", "true"], ["Strength2", "false"], ["Yoga1", "false"]], "All, then most first");
   assert.deepEqual(listed(root), ["@amy_yoga", "@Bob.Strong", "@zoe.lifts"]);
   assert.equal(root.querySelector(".count").textContent, "3 accounts");
 
@@ -1579,8 +1579,8 @@ test("similar accounts: filter chips, the search, and another niche", () => {
   const root = openPanel(page);
   const input = root.querySelector("input");
 
-  root.querySelectorAll(".chip")[2].click(); // Strength
-  assert.deepEqual(chipsOf(root).map((c) => c[1]), ["false", "false", "true"]);
+  root.querySelectorAll(".chip")[1].click(); // Strength
+  assert.deepEqual(chipsOf(root).map((c) => c[1]), ["false", "true", "false"]);
   assert.deepEqual(listed(root), ["@Bob.Strong", "@zoe.lifts"]);
   assert.equal(root.querySelector(".count").textContent, "2 accounts");
 
@@ -1607,6 +1607,154 @@ test("similar accounts: filter chips, the search, and another niche", () => {
   assert.equal(page.store.similarNiche, "Food", "remembered");
   typeInto(input, "yoga");
   assert.deepEqual(listed(root), ["@plantplate"], "only within the niche");
+});
+
+// A niche with many filters, listed in no useful order. Each filter's
+// accounts: Growth 3, the ETF and Options pairs tied on 2 (in two cases),
+// the rest 1, and Crypto none, so it gets no chip.
+const MANY = ["Options", "Dividends", "growth", "Crypto", "etfs", "Banking", "Bonds", "Forex", "Gold",
+  "IPOs", "Macro", "Penny stocks", "REITs", "Taxes", "Value"];
+const BIG_DIRECTORY = {
+  version: 4,
+  niches: [{ name: "Stock Market & Investing", count: 0, filters: MANY.map((name) => ({ name, count: 0 })) }],
+  accounts: MANY.filter((f) => f !== "Crypto").flatMap((f) => {
+    const n = f === "growth" ? 3 : f === "Options" || f === "etfs" ? 2 : 1;
+    return Array.from({ length: n }, (_, i) => ({
+      niche: "Stock Market & Investing", username: f.replace(/\W/g, "").toLowerCase() + i, fullName: "", filter: f, topics: ""
+    }));
+  })
+};
+
+// The chip rows laid out as flex-wrap would, for every page `page` makes:
+// a shown chip is 24px plus 7 a character, 6px apart, in rows 36px apart
+// across `width`. A hidden one has no place, like display:none.
+function wrapChips(page, width) {
+  const proto = Object.getPrototypeOf(page.document.createElement("div"));
+  Object.defineProperty(proto, "offsetTop", {
+    configurable: true,
+    get() {
+      const row = this.parentElement;
+      if (this.hidden || !row || !row.classList.contains("chips")) return 0;
+      let x = 0;
+      let y = 0;
+      for (const c of row.children) {
+        if (c.hidden) continue;
+        const w = 24 + 7 * c.textContent.length;
+        if (x > 0 && x + w > width) {
+          y += 36;
+          x = 0;
+        }
+        if (c === this) return y;
+        x += w + 6;
+      }
+      return 0;
+    }
+  });
+}
+
+// What the chip row shows, in order: filter chips, then the toggle.
+const shownChips = (root) => root.querySelector(".chips").children.filter((c) => !c.hidden).map((c) => c.textContent);
+
+// BIG_DIRECTORY's panel in a 300px row: two rows hold All to Dividends, and
+// "+N more" needs Dividends' place.
+function bigPanel() {
+  const page = proPage({ directory: { ok: true, directory: BIG_DIRECTORY } });
+  wrapChips(page, 300);
+  return { page, root: openPanel(page) };
+}
+const COLLAPSED = ["All18", "growth3", "etfs2", "Options2", "Banking1", "Bonds1", "+9 more"];
+const ALL_CHIPS = ["All18", "growth3", "etfs2", "Options2", "Banking1", "Bonds1", "Dividends1", "Forex1",
+  "Gold1", "IPOs1", "Macro1", "Penny stocks1", "REITs1", "Taxes1", "Value1"];
+
+test("similar accounts: chips wrap, with no scroller; only the list scrolls", () => {
+  const page = proPage({ directory: { ok: true, directory: BIG_DIRECTORY } });
+  const root = openPanel(page);
+  const css = root.querySelector("style").textContent;
+  const rule = (sel) => (css.match(new RegExp("(?:^|})" + sel.replace(/[.*]/g, "\\$&") + "\\{([^}]*)\\}")) || [])[1] || "";
+
+  assert.match(rule(".chips"), /flex-wrap:wrap/, "chips wrap");
+  assert.doesNotMatch(rule(".chips"), /overflow/, "no sideways scroller");
+  assert.doesNotMatch(css, /mask-image|chip-nav/, "no fades, no ‹ ›");
+  assert.equal(root.querySelector(".chip-nav"), null);
+
+  assert.match(rule(".head"), /flex:none/, "the head stays put");
+  assert.match(rule(".controls"), /flex:none/, "so do the niche, chips and search");
+  assert.match(rule(".body"), /flex:1 1 auto;min-height:0;overflow:auto/, "the list alone scrolls");
+  assert.ok(!root.querySelector(".body").contains(root.querySelector(".chips")), "not inside the scrolling list");
+});
+
+test("similar accounts: chips are All, then the most accounts first, then A to Z", () => {
+  const page = proPage({ directory: { ok: true, directory: BIG_DIRECTORY } });
+  const root = openPanel(page);
+  assert.deepEqual(chipsOf(root).map((c) => c[0]), [
+    "All18", "growth3", "etfs2", "Options2",
+    "Banking1", "Bonds1", "Dividends1", "Forex1", "Gold1", "IPOs1", "Macro1", "Penny stocks1", "REITs1", "Taxes1", "Value1"
+  ], "ties A to Z, ignoring case; Crypto has no one, so no chip");
+});
+
+test("similar accounts: two rows of chips at most, the last place '+N more'", () => {
+  const { root } = bigPanel();
+  assert.deepEqual(shownChips(root), COLLAPSED, "Dividends gives up its place");
+  const tops = root.querySelector(".chips").children.filter((c) => !c.hidden).map((c) => c.offsetTop);
+  assert.ok(Math.max(...tops) <= 36, "two rows");
+  const more = root.querySelectorAll(".chip-toggle").find((t) => !t.hidden);
+  assert.equal(more.getAttribute("aria-expanded"), "false");
+  assert.ok(!more.classList.contains("chip"), "a toggle, not a filter");
+
+  // A niche that fits in two rows: every chip, and no toggle.
+  const page = proPage({ directory: { ok: true, directory: DIRECTORY } });
+  wrapChips(page, 300);
+  assert.deepEqual(shownChips(openPanel(page)), ["All3", "Strength2", "Yoga1"]);
+});
+
+test("similar accounts: '+N more' shows every chip and 'Show less'; remembered for this panel only", () => {
+  const { page, root } = bigPanel();
+  const toggle = (text) => root.querySelectorAll(".chip-toggle").find((t) => t.textContent === text);
+
+  toggle("+9 more").click();
+  assert.deepEqual(shownChips(root), ALL_CHIPS.concat("Show less"));
+  assert.equal(page.document.activeElement, toggle("Show less"), "focus moves to Show less");
+  assert.equal(toggle("Show less").getAttribute("aria-expanded"), "true");
+
+  root.querySelectorAll(".chip").find((c) => c.textContent === "Gold1").click();
+  assert.deepEqual(shownChips(root), ALL_CHIPS.concat("Show less"), "picking a chip keeps it open");
+  assert.deepEqual(listed(root), ["@gold0"]);
+
+  toggle("Show less").click();
+  assert.deepEqual(shownChips(root), ["All18", "growth3", "etfs2", "Options2", "Banking1", "Bonds1", "Gold1", "+8 more"],
+    "Gold, narrower than Dividends, takes its place and leaves room for Bonds");
+  assert.equal(page.document.activeElement, root.querySelectorAll(".chip-toggle").find((t) => !t.hidden),
+    "focus back on +N more");
+
+  toggle("+8 more").click();
+  page.document.dispatchEvent({ type: "keydown", key: "Escape" });
+  assert.equal(panel(page), null);
+  const again = openPanel(page);
+  assert.deepEqual(shownChips(again), COLLAPSED, "a new panel starts with two rows");
+});
+
+test("similar accounts: a chosen chip past the cut takes the last visible chip's place", () => {
+  const { root } = bigPanel();
+  const chip = (text) => root.querySelectorAll(".chip").find((c) => c.textContent === text);
+  const toggle = () => root.querySelectorAll(".chip-toggle").find((t) => !t.hidden);
+
+  toggle().click(); // +9 more
+  chip("Value1").click();
+  toggle().click(); // Show less
+  assert.deepEqual(shownChips(root), ["All18", "growth3", "etfs2", "Options2", "Banking1", "Value1", "+9 more"]);
+  assert.equal(chip("Value1").getAttribute("aria-pressed"), "true");
+
+  toggle().click();
+  chip("Penny stocks1").click(); // a wide one
+  toggle().click();
+  assert.deepEqual(shownChips(root), ["All18", "growth3", "etfs2", "Options2", "Banking1", "Penny stocks1", "+9 more"]);
+
+  chip("growth3").click(); // within the cut: the first chips again
+  assert.deepEqual(shownChips(root), COLLAPSED);
+
+  chip("All18").click();
+  assert.deepEqual(shownChips(root), COLLAPSED);
+  assert.deepEqual(listed(root).length, 18);
 });
 
 test("similar accounts: elsewhere, the last niche chosen, else the first", () => {

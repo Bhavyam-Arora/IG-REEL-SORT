@@ -1289,32 +1289,35 @@
     ":focus-visible{outline:3px solid var(--focus);outline-offset:2px;}",
 
     // Head
-    ".head{position:relative;display:flex;align-items:center;gap:12px;padding:18px 58px 14px 18px;}",
+    ".head{position:relative;flex:none;display:flex;align-items:center;gap:12px;padding:14px 58px 12px 18px;}",
     ".igs-logo{display:block;flex:none;width:32px;height:32px;margin:0;border:0;}",
     "h2{margin:0;padding:0;color:var(--ink);font:700 17px/1.25 var(--font);letter-spacing:-.02em;}",
     ".count{margin:2px 0 0;color:var(--gray);font:500 12.5px/1.3 var(--font);}",
-    ".igs-x{position:absolute;top:18px;right:16px;width:32px;height:32px;margin:0;padding:0;border:0;",
+    ".igs-x{position:absolute;top:14px;right:16px;width:32px;height:32px;margin:0;padding:0;border:0;",
     "border-radius:50%;background:transparent;color:var(--gray);display:flex;align-items:center;",
     "justify-content:center;font:400 22px/1 var(--font);cursor:pointer;}",
     ".igs-x:hover{background:var(--bg-2);color:var(--ink);}",
 
-    // Niche, filter chips, search
-    ".controls{display:flex;flex-direction:column;gap:10px;padding:0 18px 14px;border-bottom:1px solid var(--line);}",
+    // Niche, filter chips, search: fixed at the top and compact, so the list
+    // below keeps the height.
+    ".controls{flex:none;display:flex;flex-direction:column;gap:8px;padding:0 18px 12px;border-bottom:1px solid var(--line);}",
     ".field{position:relative;display:block;margin:0;}",
     ".field svg{position:absolute;top:50%;transform:translateY(-50%);color:var(--gray);pointer-events:none;}",
     ".niche svg{right:12px;}",
     ".find svg{left:12px;}",
-    "select,input{display:block;width:100%;height:40px;margin:0;border:1px solid var(--line-2);",
+    "select,input{display:block;width:100%;height:36px;margin:0;border:1px solid var(--line-2);",
     "border-radius:var(--r-input);background:var(--bg);color:var(--ink);outline:none;}",
     "select{appearance:none;-webkit-appearance:none;padding:0 38px 0 12px;cursor:pointer;font:600 13.5px/1 var(--font);}",
     "input{padding:0 12px 0 36px;font:400 13.5px/1 var(--font);}",
     "input::placeholder{color:var(--gray-2);}",
     "select:focus,input:focus{border-color:var(--pink);box-shadow:0 0 0 3px var(--focus);}",
+    // Chips wrap, two rows at most until "+N more" is clicked.
     ".chips{display:flex;flex-wrap:wrap;gap:6px;margin:0;padding:0;}",
-    ".chip{display:inline-flex;align-items:center;gap:5px;height:30px;margin:0;padding:0 12px;",
+    ".chip,.chip-toggle{display:inline-flex;align-items:center;gap:5px;height:30px;margin:0;padding:0 12px;",
     "border:1px solid var(--line-2);border-radius:var(--r-pill);background:transparent;color:var(--ink-2);",
     "cursor:pointer;white-space:nowrap;font:600 12.5px/1 var(--font);}",
-    ".chip:hover{background:var(--bg-2);}",
+    ".chip:hover,.chip-toggle:hover{background:var(--bg-2);}",
+    ".chip-toggle{border-style:dashed;color:var(--gray);}",
     ".chip i{font-style:normal;font-weight:500;color:var(--gray);}",
     ".chip[aria-pressed=\"true\"]{border-color:var(--ink);background:var(--ink);color:var(--bg);}",
     ".chip[aria-pressed=\"true\"] i{color:inherit;opacity:.7;}",
@@ -1405,6 +1408,18 @@
   function nicheAccounts(accounts, niche, here) {
     return accounts.filter(function (a) {
       return a.niche === niche && USERNAME_RE.test(a.username) && a.username.toLowerCase() !== here;
+    });
+  }
+
+  // The filter chips after All: { name, n } for each filter with someone in
+  // it, the most accounts first, then A to Z.
+  function chipOrder(filters, accounts) {
+    return filters.map(function (name) {
+      return { name: name, n: accounts.filter(function (a) { return a.filter === name; }).length };
+    }).filter(function (c) {
+      return c.n > 0;
+    }).sort(function (a, b) {
+      return b.n - a.n || a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
     });
   }
 
@@ -1597,6 +1612,19 @@
     chips.setAttribute("role", "group");
     chips.setAttribute("aria-label", "Filter");
     controls.appendChild(chips);
+    // For this panel only: all the chips, after "+N more" until "Show less".
+    var chipsOpen = false;
+    var moreChip = chipToggle(true);
+    var lessChip = chipToggle(false);
+    // A narrower window can need a third row: laid out again when the width
+    // changes (not the height, which the layout itself sets).
+    var chipWidth = 0;
+    var chipResize = typeof ResizeObserver === "function" ? new ResizeObserver(function () {
+      if (chips.clientWidth === chipWidth) return;
+      chipWidth = chips.clientWidth;
+      layOutChips();
+    }) : null;
+    if (chipResize) chipResize.observe(chips);
     var findField = el("label", "field find");
     findField.appendChild(svgIcon("search", 16, 2));
     var input = el("input");
@@ -1617,6 +1645,7 @@
       if (!open) return;
       open = false;
       similar = null;
+      if (chipResize) chipResize.disconnect();
       document.removeEventListener("keydown", onKey, true);
       host.remove();
       if (returnFocus && returnFocus.isConnected) returnFocus.focus();
@@ -1654,27 +1683,86 @@
       return nicheAccounts(data.accounts, niche, here);
     }
 
+    // "+N more", which shows every chip, or "Show less", which goes back to
+    // two rows. Focus moves to the other one, since this one is then hidden.
+    function chipToggle(more) {
+      var b = el("button", "chip-toggle", more ? "" : "Show less");
+      b.type = "button";
+      b.hidden = true;
+      b.setAttribute("aria-expanded", String(!more));
+      b.addEventListener("click", function (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        chipsOpen = more;
+        layOutChips();
+        var other = more ? lessChip : moreChip;
+        if (!other.hidden) other.focus();
+      });
+      return b;
+    }
+
+    // Two rows of chips at most, the last place on the second going to
+    // "+N more". The chosen chip always shows: when it's past the cut it takes
+    // the last chip's place. All shown once opened, then "Show less". Rows
+    // are read off the laid-out chips; unmeasured, everything shows.
+    function layOutChips() {
+      var list = Array.prototype.slice.call(chips.querySelectorAll(".chip"));
+      var top = function (c) { return c.offsetTop || 0; };
+      list.forEach(function (c) { c.hidden = false; });
+      moreChip.hidden = true;
+      lessChip.hidden = true;
+      var rows = [];
+      list.forEach(function (c) {
+        if (rows.indexOf(top(c)) === -1) rows.push(top(c));
+      });
+      if (rows.length <= 2) return;
+      if (chipsOpen) {
+        lessChip.hidden = false;
+        return;
+      }
+      rows.sort(function (a, b) { return a - b; });
+      var last = rows[1];
+      var chosen = list.filter(function (c) { return c.getAttribute("aria-pressed") === "true"; })[0];
+      var at = list.indexOf(chosen);
+      var k = list.filter(function (c) { return top(c) <= last; }).length;
+      for (; k > 1; k--) {
+        list.forEach(function (c, i) {
+          c.hidden = at >= k ? !(i < k - 1 || i === at) : i >= k;
+        });
+        moreChip.textContent = "+" + (list.length - k) + " more";
+        moreChip.hidden = false;
+        if (top(moreChip) <= last) break;
+      }
+    }
+
     function renderChips() {
       emptyNode(chips);
       var inNiche = nicheList();
       var info = data.niches.filter(function (n) { return n.name === niche; })[0];
-      var names = [null].concat((info ? info.filters : []).map(function (f) { return f.name; }));
-      names.forEach(function (name) {
-        var n = name === null ? inNiche.length : inNiche.filter(function (a) { return a.filter === name; }).length;
-        if (name !== null && !n) return;
-        var chip = el("button", "chip", name === null ? "All" : name);
+      var rows = [{ name: null, n: inNiche.length }].concat(chipOrder((info ? info.filters : []).map(function (f) {
+        return f.name;
+      }), inNiche));
+      rows.forEach(function (row) {
+        var chip = el("button", "chip", row.name === null ? "All" : row.name);
         chip.type = "button";
-        chip.setAttribute("aria-pressed", String(filter === name));
-        chip.appendChild(el("i", "", String(n)));
+        chip.setAttribute("aria-pressed", String(filter === row.name));
+        chip.appendChild(el("i", "", String(row.n)));
         chip.addEventListener("click", function (ev) {
           ev.preventDefault();
           ev.stopPropagation();
-          filter = name;
-          renderChips();
+          filter = row.name;
+          // Not rebuilt, so the chip keeps focus.
+          chips.querySelectorAll(".chip").forEach(function (c) {
+            c.setAttribute("aria-pressed", String(c === chip));
+          });
+          layOutChips();
           renderList();
         });
         chips.appendChild(chip);
       });
+      chips.appendChild(moreChip);
+      chips.appendChild(lessChip);
+      layOutChips();
     }
 
     function renderList() {
