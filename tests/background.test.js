@@ -43,6 +43,7 @@ function loadWorker(opts) {
   if (!opts.rulesDue && !("rulesLastCheckedAt" in local)) local.rulesLastCheckedAt = Date.now();
   const calls = [];
   const warnings = [];
+  const logs = [];
   const pings = [];
   const intervals = new Set();
   let onMessage = null;
@@ -54,7 +55,7 @@ function loadWorker(opts) {
     remove: async (k) => [].concat(k).forEach((key) => delete store[key])
   });
   const w = {
-    console: { log() {}, warn: (...a) => warnings.push(a.join(" ")) },
+    console: { log: (...a) => logs.push(a.join(" ")), warn: (...a) => warnings.push(a.join(" ")) },
     chrome: {
       runtime: {
         onInstalled: { addListener: (fn) => lifecycle.installed.push(fn) },
@@ -104,6 +105,7 @@ function loadWorker(opts) {
     session,
     calls,
     warnings,
+    logs,
     pings,
     intervals,
     run: (code) => vm.runInContext(code, w),
@@ -181,11 +183,227 @@ test("the limit in the message is MAX_BYTES, not a fixed 24", async () => {
 
 test("under the limit: uploaded, then submitted", async () => {
   const sw = loadWorker({ routes: routes(() => res(200, { buffer: { byteLength: 5_000_000 } })) });
-  sw.run("POLL_FIRST_MS = 1;");
+  sw.run("POLL_FAST_MS = 1;");
   const r = await sw.send({ type: "transcribe", post: POST });
   assert.equal(r.ok, true, r.error);
   assert.ok(sw.calls.includes(S3));
   assert.ok(sw.calls.indexOf(S3) < sw.calls.findIndex((u) => /submit/.test(u)), "upload before submit");
+});
+
+test("timing: one console line per job and a transcribe entry in the health log, without the reel code", async () => {
+  const sw = loadWorker({
+    local: { health: [{ type: "sort", profile: "demo" }] },
+    routes: routes(() => res(200, { buffer: { byteLength: 14_200_000 } }))
+  });
+  sw.run("POLL_FAST_MS = 1;");
+  const r = await sw.send({ type: "transcribe", post: POST });
+  assert.equal(r.ok, true, r.error);
+  await new Promise((done) => setTimeout(done, 5));
+  const line = sw.logs.find((l) => l.startsWith("[Sortcut] transcribe ABC123: "));
+  assert.match(line, /^\[Sortcut\] transcribe ABC123: video \(fallback: no manifest\) · size 14\.2 MB · lookup \d+\.\ds · download \d+\.\ds · upload \d+\.\ds · submit \d+\.\ds · server wait \d+\.\ds \(queued \d+\.\ds, 1 poll\) · total \d+\.\ds$/);
+  const [entry, older] = sw.local.health;
+  assert.equal(older.type, "sort", "the sort entry is kept, after the new one");
+  assert.equal(entry.type, "transcribe");
+  assert.equal(entry.outcome, "done");
+  assert.equal(entry.source, "video");
+  assert.equal(entry.fallback, "no manifest");
+  assert.equal(entry.bytes, 14_200_000);
+  assert.equal(entry.polls, 1);
+  for (const k of ["lookupMs", "downloadMs", "uploadMs", "submitMs", "waitMs", "queuedMs", "totalMs"]) {
+    assert.equal(typeof entry[k], "number", k);
+  }
+  assert.ok(!JSON.stringify(entry).includes("ABC123"), "no reel code stored");
+});
+
+test("timing: a failed job is logged as failed", async () => {
+  const sw = loadWorker({ routes: routes(() => res(200, { headers: { "content-length": "31400000" } })) });
+  const r = await sw.send({ type: "transcribe", post: POST });
+  assert.equal(r.ok, false);
+  await new Promise((done) => setTimeout(done, 5));
+  assert.match(sw.logs.find((l) => l.startsWith("[Sortcut] transcribe")), /· total \d+\.\ds · failed$/);
+  assert.equal(sw.local.health[0].outcome, "failed");
+  assert.equal(sw.local.health[0].bytes, null);
+});
+
+// ---- Audio-only download ----
+
+const AUDIO_LO = "https://scontent.cdninstagram.com/v/audio-48k.mp4?a=1&b=2";
+const AUDIO_HI = "https://scontent.cdninstagram.com/v/audio-96k.mp4";
+const xml = (s) => s.replace(/&/g, "&amp;");
+const VIDEO_SET =
+  '<AdaptationSet contentType="video"><Representation bandwidth="400000" mimeType="video/mp4">' +
+  "<BaseURL>https://scontent.cdninstagram.com/v/video-only.mp4</BaseURL></Representation></AdaptationSet>";
+const audioSet = (reps) => '<AdaptationSet contentType="audio">' + reps + "</AdaptationSet>";
+const audioRep = (bw, url) =>
+  '<Representation bandwidth="' + bw + '" mimeType="audio/mp4" codecs="mp4a.40.5">' +
+  '<AudioChannelConfiguration value="2"/>' + (url ? "<BaseURL>" + xml(url) + "</BaseURL>" : "") +
+  '<SegmentBase indexRange="0-1"><Initialization range="0-1"/></SegmentBase></Representation>';
+const mpd = (...sets) => '<?xml version="1.0"?><MPD><Period>' + sets.join("") + "</Period></MPD>";
+const FULL_MPD = mpd(VIDEO_SET, audioSet(audioRep(96000, AUDIO_HI) + audioRep(48000, AUDIO_LO)));
+
+// routes() with a media info answer that carries `manifest`, and the audio
+// files answering with `audio`.
+function audioRoutes(manifest, audio) {
+  const r = routes(() => res(200, { buffer: { byteLength: 14_200_000 } }));
+  r["/api/v1/media/111/info/"] = () =>
+    res(200, { body: { items: [{ video_versions: [{ url: CDN, width: 480, height: 854 }], video_dash_manifest: manifest }] } });
+  r["/v/audio-"] = audio || (() => res(200, { buffer: { byteLength: 1_300_000 } }));
+  return r;
+}
+
+const settle = () => new Promise((done) => setTimeout(done, 5));
+
+async function transcribeWith(manifest, audio, post) {
+  const sw = loadWorker({ routes: audioRoutes(manifest, audio) });
+  sw.run("POLL_FAST_MS = 1;");
+  const r = await sw.send({ type: "transcribe", post: post || POST });
+  assert.equal(r.ok, true, r.error);
+  await settle();
+  return { sw, entry: sw.local.health[0], line: sw.logs.find((l) => l.startsWith("[Sortcut] transcribe")) };
+}
+
+const downloads = (calls) => calls.filter((u) => /cdninstagram/.test(u));
+
+test("audio: the lowest-bandwidth audio Representation is downloaded and uploaded, not the video", async () => {
+  const { sw, entry, line } = await transcribeWith(FULL_MPD);
+  assert.deepEqual(downloads(sw.calls), [AUDIO_LO], "the &amp; in the BaseURL is decoded");
+  assert.ok(sw.calls.indexOf(AUDIO_LO) < sw.calls.indexOf(S3), "downloaded before the upload");
+  assert.equal(entry.source, "audio");
+  assert.equal(entry.fallback, null);
+  assert.equal(entry.bytes, 1_300_000);
+  assert.match(line, /^\[Sortcut\] transcribe ABC123: audio · size 1\.3 MB · /);
+});
+
+test("audio: uploaded under the same name and type as the video", async () => {
+  let file = null;
+  const r = audioRoutes(FULL_MPD, () => res(200, { buffer: new ArrayBuffer(8) }));
+  r[S3] = (url, init) => ((file = init.body.get("file")), res(204));
+  const sw = loadWorker({ routes: r });
+  sw.run("POLL_FAST_MS = 1;");
+  assert.equal((await sw.send({ type: "transcribe", post: POST })).ok, true);
+  assert.equal(file.name, "ABC123.mp4");
+  assert.equal(file.type, "video/mp4");
+  assert.equal(file.size, 8);
+});
+
+test("audio: a set marked audio by mimeType alone counts, and a self-closing Representation has no BaseURL", async () => {
+  const set = '<AdaptationSet mimeType="audio/mp4"><Representation bandwidth="1" mimeType="audio/mp4"/>' +
+    audioRep(64000, AUDIO_HI).replace(' mimeType="audio/mp4"', "") + "</AdaptationSet>";
+  const { sw, entry } = await transcribeWith(mpd(VIDEO_SET, set));
+  assert.deepEqual(downloads(sw.calls), [AUDIO_HI]);
+  assert.equal(entry.source, "audio");
+});
+
+for (const [name, manifest, reason] of [
+  ["no audio track", mpd(VIDEO_SET), "no audio track"],
+  ["an audio track without a BaseURL", mpd(VIDEO_SET, audioSet(audioRep(48000, null))), "no BaseURL"],
+  ["an audio BaseURL off the allowed CDN hosts", mpd(audioSet(audioRep(48000, "https://audio.example.com/a.mp4"))), "audio host not allowed"],
+  ["no manifest at all", null, "no manifest"],
+  ["a manifest that isn't an MPD", "not xml", "no audio track"]
+]) {
+  test("fallback to the video: " + name, async () => {
+    const { sw, entry, line } = await transcribeWith(manifest);
+    assert.deepEqual(downloads(sw.calls), [CDN]);
+    assert.equal(entry.source, "video");
+    assert.equal(entry.fallback, reason);
+    assert.ok(line.startsWith("[Sortcut] transcribe ABC123: video (fallback: " + reason + ") · size 14.2 MB · "), line);
+  });
+}
+
+for (const [name, audio] of [
+  ["refused (403)", () => res(403)],
+  ["unreachable", () => { throw new TypeError("Failed to fetch"); }],
+  ["empty", () => res(200, { buffer: { byteLength: 0 } })],
+  ["over MAX_BYTES", () => res(200, { headers: { "content-length": "30000000" } })]
+]) {
+  test("fallback to the video: the audio download is " + name, async () => {
+    const { sw, entry } = await transcribeWith(FULL_MPD, audio);
+    assert.deepEqual(downloads(sw.calls), [AUDIO_LO, CDN]);
+    assert.equal(entry.source, "video");
+    assert.equal(entry.fallback, "audio download failed");
+    assert.equal(entry.bytes, 14_200_000);
+  });
+}
+
+test("fallback: a too-big video after the audio failed is refused before any upload, no credit used", async () => {
+  const r = audioRoutes(FULL_MPD, () => res(403));
+  r[CDN] = () => res(200, { headers: { "content-length": "31400000" } });
+  const sw = loadWorker({ routes: r });
+  const out = await sw.send({ type: "transcribe", post: POST });
+  assert.equal(out.ok, false);
+  assert.equal(out.error, "This reel can't be transcribed — it's about 31 MB, over our current 24 MB limit. No credit was used.");
+  neverUploaded(sw.calls);
+});
+
+test("a post that already has a video link still looks up the audio, and keeps its link if the lookup fails", async () => {
+  const withLink = Object.assign({}, POST, { videoUrl: CDN });
+  const { sw, entry } = await transcribeWith(FULL_MPD, null, withLink);
+  assert.ok(sw.calls.some((u) => /media\/111\/info/.test(u)));
+  assert.equal(entry.source, "audio");
+
+  const r = audioRoutes(FULL_MPD);
+  r["/api/v1/media/111/info/"] = () => res(500);
+  const sw2 = loadWorker({ routes: r });
+  sw2.run("POLL_FAST_MS = 1;");
+  assert.equal((await sw2.send({ type: "transcribe", post: withLink })).ok, true);
+  await settle();
+  assert.deepEqual(downloads(sw2.calls), [CDN]);
+  assert.equal(sw2.local.health[0].fallback, "lookup failed");
+});
+
+test("the CDN hosts the audio may come from are all in manifest.json's host_permissions", () => {
+  const sw = loadWorker();
+  const suffixes = JSON.parse(sw.run("JSON.stringify(CDN_HOST_SUFFIXES)"));
+  assert.ok(suffixes.length);
+  for (const h of suffixes) assert.ok(MANIFEST.host_permissions.includes("https://*" + h + "/*"), h);
+});
+
+// ---- Poll schedule ----
+
+test("poll schedule: every 1 s for the first 20 s, then every 2 s", () => {
+  const sw = loadWorker();
+  assert.deepEqual(
+    [0, 1000, 19_999, 20_000, 60_000, 599_000].map((ms) => sw.run("pollDelay(" + ms + ")")),
+    [1000, 1000, 1000, 2000, 2000, 2000]
+  );
+});
+
+// A clock that only moves when the worker sleeps, so the delays it asks for
+// are the schedule.
+function fakeClock(sw) {
+  sw.run(`
+    var fakeNow = Date.now();
+    Date.now = function () { return fakeNow; };
+    var slept = [];
+    sleep = function (ms) { slept.push(ms); fakeNow += ms; return Promise.resolve(); };
+  `);
+  return () => JSON.parse(sw.run("JSON.stringify(slept)"));
+}
+
+test("poll schedule: the delays a long job actually waits", async () => {
+  let polls = 0;
+  const r = routes(() => res(200, { buffer: { byteLength: 5_000_000 } }));
+  const base = r["/v1/transcriptions"];
+  r["/v1/transcriptions"] = (url) =>
+    /\/j1$/.test(url) && ++polls < 25 ? res(200, { body: { status: "processing" } }) : base(url);
+  const sw = loadWorker({ routes: r });
+  const slept = fakeClock(sw);
+  assert.equal((await sw.send({ type: "transcribe", post: POST })).ok, true);
+  assert.deepEqual(slept(), [...Array(20).fill(1000), ...Array(5).fill(2000)]);
+});
+
+test("poll schedule: still gives up after 10 minutes", async () => {
+  const r = routes(() => res(200, { buffer: { byteLength: 5_000_000 } }));
+  const base = r["/v1/transcriptions"];
+  r["/v1/transcriptions"] = (url) => (/\/j1$/.test(url) ? res(200, { body: { status: "processing" } }) : base(url));
+  const sw = loadWorker({ routes: r });
+  const slept = fakeClock(sw);
+  const out = await sw.send({ type: "transcribe", post: POST });
+  assert.equal(out.ok, false);
+  assert.equal(out.error, "Still processing — click again later to fetch it.");
+  const waited = slept().reduce((a, b) => a + b, 0);
+  assert.ok(waited <= 10 * 60e3 && waited > 10 * 60e3 - 2000, String(waited));
+  assert.equal(slept().length, 20 + (10 * 60e3 - 20e3) / 2000);
 });
 
 test("signed out: says so, and opens no Google window and calls nothing", async () => {
@@ -239,7 +457,7 @@ test("a failed no-speech job says no credit was used", async () => {
       ? res(200, { body: { status: "failed", error: "No speech detected.", refunded: true } })
       : base(url);
   const sw = loadWorker({ routes: r0 });
-  sw.run("POLL_FIRST_MS = 1;");
+  sw.run("POLL_FAST_MS = 1;");
   const r = await sw.send({ type: "transcribe", post: POST });
   assert.equal(r.error, "No speech was detected in this reel. No credit was used.");
 });
@@ -250,7 +468,7 @@ test("a done job with no text says no credit was used", async () => {
   r0["/v1/transcriptions"] = (url) =>
     /\/j1$/.test(url) ? res(200, { body: { status: "done", text: "  " } }) : base(url);
   const sw = loadWorker({ routes: r0 });
-  sw.run("POLL_FIRST_MS = 1;");
+  sw.run("POLL_FAST_MS = 1;");
   const r = await sw.send({ type: "transcribe", post: POST });
   assert.equal(r.error, "No speech was detected in this reel. No credit was used.");
 });
@@ -260,7 +478,7 @@ test("keeps the worker alive during the download and upload, then stops", async 
   const r0 = routes(() => slow(res(200, { buffer: { byteLength: 5_000_000 } })));
   r0[S3] = () => slow(res(204));
   const sw = loadWorker({ routes: r0 });
-  sw.run("POLL_FIRST_MS = 1; KEEPALIVE_MS = 5;");
+  sw.run("POLL_FAST_MS = 1; KEEPALIVE_MS = 5;");
   const r = await sw.send({ type: "transcribe", post: POST });
   assert.equal(r.ok, true, r.error);
   assert.ok(sw.pings.length > 0, "pinged chrome.runtime while transferring");

@@ -25,6 +25,8 @@ async function sortLog() {
   return list;
 }
 self.sortLog = sortLog;
+// Entries kept, shared with content.js's LOG_MAX.
+var HEALTH_MAX = 50;
 console.log("[GridSorter] worker started \u2014 run sortLog() to see the health log");
 
 // Same content, whatever the key order: chrome.storage hands objects back with
@@ -220,12 +222,75 @@ function smallestRendition(versions) {
   return best;
 }
 
-// Instagram's grid queries return thumbnails and counts but never a playable
-// file, so the URL has to be asked for per-post at click time. This is a plain
-// REST path with no doc_id or query_hash in it, which is the part of rule 1
-// that actually matters — nothing here breaks when Instagram rotates its
-// GraphQL ids. It rides the user's existing session cookies.
-async function resolveVideoUrl(pk, code) {
+// The CDN hosts manifest.json's host_permissions cover. An audio link on any
+// other host is passed over for the video, never fetched.
+var CDN_HOST_SUFFIXES = [".cdninstagram.com", ".fbcdn.net"];
+
+function onAllowedCdn(url) {
+  try {
+    var u = new URL(url);
+    return u.protocol === "https:" && CDN_HOST_SUFFIXES.some(function (h) {
+      return u.hostname.slice(-h.length) === h;
+    });
+  } catch (e) {
+    return false;
+  }
+}
+
+function xmlText(s) {
+  return s.replace(/&(?:#(\d+)|#x([0-9a-f]+)|(amp|lt|gt|quot|apos));/gi, function (m, dec, hex, name) {
+    if (dec) return String.fromCodePoint(+dec);
+    if (hex) return String.fromCodePoint(parseInt(hex, 16));
+    return { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" }[name.toLowerCase()];
+  });
+}
+
+function xmlAttr(tag, name) {
+  var m = new RegExp("\\s" + name + '="([^"]*)"').exec(tag);
+  return m ? xmlText(m[1]) : null;
+}
+
+// The reel's audio on its own, out of video_dash_manifest (an MPD, as a
+// string): the lowest-bandwidth audio Representation's BaseURL, which is a
+// whole playable .mp4 of just the sound — a small fraction of the video's
+// bytes, and the words are the same. Regexes rather than DOMParser, which a
+// service worker doesn't have. { url } or { reason } for the timing line.
+function audioTrackOf(manifest) {
+  if (typeof manifest !== "string" || !manifest) return { reason: "no manifest" };
+  var sawAudio = false;
+  var best = null;
+  var bestBw = Infinity;
+  (manifest.match(/<AdaptationSet\b[\s\S]*?<\/AdaptationSet>/g) || []).forEach(function (set) {
+    var head = /<AdaptationSet\b[^>]*>/.exec(set)[0];
+    var setIsAudio = xmlAttr(head, "contentType") === "audio" || /^audio\//.test(xmlAttr(head, "mimeType") || "");
+    (set.match(/<Representation\b[^>]*?(?:\/>|>[\s\S]*?<\/Representation>)/g) || []).forEach(function (r) {
+      var rHead = /<Representation\b[^>]*>/.exec(r)[0];
+      if (!setIsAudio && !/^audio\//.test(xmlAttr(rHead, "mimeType") || "")) return;
+      sawAudio = true;
+      var base = /<BaseURL>([^<]+)<\/BaseURL>/.exec(r);
+      var url = base ? xmlText(base[1]).trim() : "";
+      if (!/^https:\/\//.test(url)) return;
+      var bw = parseInt(xmlAttr(rHead, "bandwidth") || "", 10);
+      if (!isFinite(bw)) bw = Infinity;
+      if (!best || bw < bestBw) {
+        best = url;
+        bestBw = bw;
+      }
+    });
+  });
+  if (!sawAudio) return { reason: "no audio track" };
+  if (!best) return { reason: "no BaseURL" };
+  if (!onAllowedCdn(best)) return { reason: "audio host not allowed" };
+  return { url: best };
+}
+
+// Instagram's grid queries return thumbnails and counts but never the DASH
+// manifest, so the files have to be asked for per-post at click time. This is
+// a plain REST path with no doc_id or query_hash in it, which is the part of
+// rule 1 that actually matters — nothing here breaks when Instagram rotates
+// its GraphQL ids. It rides the user's existing session cookies.
+// { video, audio: { url } | { reason } }.
+async function lookupMedia(pk, code) {
   if (!pk) {
     throw new Error("No media id for this post. Re-run the sort and try again.");
   }
@@ -273,7 +338,37 @@ async function resolveVideoUrl(pk, code) {
       ". Photo posts and carousels can't be transcribed."
     );
   }
-  return url;
+  return { video: url, audio: audioTrackOf(item.video_dash_manifest) };
+}
+
+// A post that already carries a video link (the grid had one) still asks for
+// the manifest, for the audio; if that lookup fails, the link it has will do.
+async function findMedia(post) {
+  if (!post.videoUrl) return lookupMedia(post.pk, post.code);
+  if (!post.pk) return { video: post.videoUrl, audio: { reason: "no media id" } };
+  try {
+    return await lookupMedia(post.pk, post.code);
+  } catch (e) {
+    return { video: post.videoUrl, audio: { reason: "lookup failed" } };
+  }
+}
+
+// The audio when there is one, else (or if it won't download) the video, as
+// before. Both go through fetchVideo's size checks.
+async function fetchMedia(media, t) {
+  if (media.audio.url) {
+    try {
+      var buf = await fetchVideo(media.audio.url);
+      t.source = "audio";
+      return buf;
+    } catch (e) {
+      console.warn("[Sortcut] audio download failed, using the video —", e && e.message ? e.message : e);
+      media.audio = { reason: "audio download failed" };
+    }
+  }
+  t.source = "video";
+  t.fallback = media.audio.reason;
+  return fetchVideo(media.video);
 }
 
 // Thrown before the upload, so before /submit, which is where the credit is
@@ -325,8 +420,11 @@ async function fetchVideo(url) {
 
 // ---- Sortcut transcription jobs ----
 
-var POLL_FIRST_MS = 2000;
-var POLL_MAX_MS = 5000;
+// Every second for the first 20 s of the wait, when most jobs finish, then
+// every 2 s.
+var POLL_FAST_MS = 1000;
+var POLL_FAST_FOR_MS = 20 * 1000;
+var POLL_SLOW_MS = 2000;
 // The job carries on server side after this; a later click finds it again
 // through the same reel's job instead of starting (and charging) a new one.
 var GIVE_UP_MS = 10 * 60 * 1000;
@@ -335,6 +433,10 @@ var GIVE_UP_MS = 10 * 60 * 1000;
 // bare "didn't go through" can't be told apart from any other failure in a report.
 function uploadFailed(detail) {
   return "The upload didn't go through" + (detail ? " (" + detail + ")" : "") + ". Please try again.";
+}
+
+function pollDelay(waitedMs) {
+  return waitedMs < POLL_FAST_FOR_MS ? POLL_FAST_MS : POLL_SLOW_MS;
 }
 
 function sleep(ms) {
@@ -465,18 +567,19 @@ async function keepAlive(work) {
 // Every pass reads storage (inside api) and may message the tab; both are
 // extension API calls, which is what keeps an MV3 worker from idling out
 // during a long wait.
-async function waitForJob(jobId, status, tell) {
+async function waitForJob(jobId, status, tell, t) {
   var giveUpAt = Date.now() + GIVE_UP_MS;
-  var delay = POLL_FIRST_MS;
+  t.waitFrom = Date.now();
   for (;;) {
+    var delay = pollDelay(Date.now() - t.waitFrom);
     tell(status === "queued" ? "Waiting in queue…" : "Transcribing…");
     if (Date.now() + delay > giveUpAt) {
       throw new Error("Still processing — click again later to fetch it.");
     }
     await sleep(delay);
-    delay = Math.min(POLL_MAX_MS, delay * 1.25);
 
     var res;
+    t.polls++;
     try {
       res = await api("/v1/transcriptions/" + encodeURIComponent(jobId));
     } catch (e) {
@@ -487,13 +590,16 @@ async function waitForJob(jobId, status, tell) {
     if (!res.ok) throw apiError(res);
 
     var job = res.data || {};
+    // First poll that found it out of the queue: splits the wait into queue
+    // time and Groq time, to within one poll interval.
+    if (job.status !== "queued" && t.queuedMs === null) t.queuedMs = Date.now() - t.waitFrom;
     if (job.status === "done") return transcriptOf(job);
     if (job.status === "failed") throw new Error(failedText(job));
     status = job.status;
   }
 }
 
-async function run(post, tell) {
+async function run(post, tell, t) {
   if (!post || !post.code) throw new Error("No post data. Re-run the sort and try again.");
 
   // Signed out: the page shows its own sign-in dialog, and the Google window
@@ -510,24 +616,35 @@ async function run(post, tell) {
   var job = res.data || {};
 
   // Transcribed before and still cached: free, and no download at all.
-  if (job.status === "done") return transcriptOf(job);
+  if (job.status === "done") {
+    t.cached = true;
+    return transcriptOf(job);
+  }
   if (!job.jobId) throw new Error("Something went wrong on our side. Please try again.");
 
   // Only a job that is waiting for its file gets an upload link. Anything
   // already queued or processing skips straight to waiting.
   if (job.upload) {
-    tell("Uploading…");
-    // Normally null — grid payloads don't carry a rendition — so this almost
-    // always falls through to the on-demand lookup.
-    var url = post.videoUrl || (await resolveVideoUrl(post.pk, post.code));
+    tell("Downloading reel…");
+    var at = Date.now();
+    var media = await findMedia(post);
+    t.lookupMs = Date.now() - at;
     await keepAlive(async function () {
-      var buf = await fetchVideo(url);
+      at = Date.now();
+      var buf = await fetchMedia(media, t);
+      t.downloadMs = Date.now() - at;
+      t.bytes = buf.byteLength;
+      tell("Uploading…");
+      at = Date.now();
       await upload(job.upload, buf, post.code);
+      t.uploadMs = Date.now() - at;
     });
 
+    at = Date.now();
     var sub = await api("/v1/transcriptions/" + encodeURIComponent(job.jobId) + "/submit", {
       method: "POST"
     });
+    t.submitMs = Date.now() - at;
     if (!sub.ok) throw apiError(sub);
     // The credit is charged at submit, so the popup's usage line is now stale.
     await clearMeCache();
@@ -536,7 +653,71 @@ async function run(post, tell) {
     job = { jobId: job.jobId, status: (sub.data && sub.data.status) || job.status };
   }
 
-  return waitForJob(job.jobId, job.status, tell);
+  return waitForJob(job.jobId, job.status, tell, t);
+}
+
+// ---- Transcription timing ----
+// Where a transcription's time goes, one line per job in this worker's
+// console and one "transcribe" entry in the health log (the same list
+// sortLog() prints). Durations, the file size and the outcome only: the reel
+// code is in the console line, never in the stored entry.
+function newTiming() {
+  return {
+    start: Date.now(), cached: false, source: null, fallback: null, bytes: null, lookupMs: null, downloadMs: null,
+    uploadMs: null, submitMs: null, waitFrom: null, queuedMs: null, polls: 0
+  };
+}
+
+function secs(ms) {
+  return (ms / 1000).toFixed(1) + "s";
+}
+
+async function logTiming(code, t, outcome) {
+  var totalMs = Date.now() - t.start;
+  var waitMs = t.waitFrom === null ? null : Date.now() - t.waitFrom;
+  var parts = [];
+  if (t.cached) parts.push("cached");
+  if (t.source === "audio") parts.push("audio");
+  if (t.source === "video") parts.push("video (fallback" + (t.fallback ? ": " + t.fallback : "") + ")");
+  if (t.bytes !== null) parts.push("size " + (t.bytes / 1e6).toFixed(1) + " MB");
+  if (t.lookupMs !== null) parts.push("lookup " + secs(t.lookupMs));
+  if (t.downloadMs !== null) parts.push("download " + secs(t.downloadMs));
+  if (t.uploadMs !== null) parts.push("upload " + secs(t.uploadMs));
+  if (t.submitMs !== null) parts.push("submit " + secs(t.submitMs));
+  if (waitMs !== null) {
+    parts.push("server wait " + secs(waitMs) + " (" +
+      (t.queuedMs === null ? "" : "queued " + secs(t.queuedMs) + ", ") +
+      t.polls + " poll" + (t.polls === 1 ? "" : "s") + ")");
+  }
+  parts.push("total " + secs(totalMs));
+  if (outcome !== "done") parts.push(outcome);
+  console.log("[Sortcut] transcribe " + code + ": " + parts.join(" \u00b7 "));
+
+  var entry = {
+    type: "transcribe",
+    at: new Date(t.start).toISOString(),
+    outcome: outcome,
+    cached: t.cached,
+    source: t.source,
+    fallback: t.fallback,
+    bytes: t.bytes,
+    lookupMs: t.lookupMs,
+    downloadMs: t.downloadMs,
+    uploadMs: t.uploadMs,
+    submitMs: t.submitMs,
+    waitMs: waitMs,
+    queuedMs: t.queuedMs,
+    polls: t.polls,
+    totalMs: totalMs
+  };
+  try {
+    var list = (await chrome.storage.local.get({ health: [] })).health;
+    list = (Array.isArray(list) ? list : []).slice(0, HEALTH_MAX - 1);
+    list.unshift(entry);
+    await chrome.storage.local.set({ health: list });
+  } catch (e) {
+    console.warn("[Sortcut] health log: couldn't save this transcription \u2014", e && e.message ? e.message : e);
+  }
 }
 
 // Status lines for the tile that asked, while its job waits on the server.
@@ -905,10 +1086,15 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     // The one place every transcription failure passes through, so this is
     // where the service-worker console shows it, with any detail that doesn't
     // belong in the on-page text.
-    var job = run(msg.post, tell).catch(function (err) {
+    var timing = newTiming();
+    var job = run(msg.post, tell, timing).then(function (r) {
+      logTiming(code, timing, "done");
+      return r;
+    }, function (err) {
       if (!(err && (err.signedOut || err.needsPro))) {
         console.warn("[GridSorter] transcription failed", code, "—", err && err.message,
           err && err.detail ? "(" + err.detail + ")" : "");
+        logTiming(code, timing, "failed");
       }
       throw err;
     });
