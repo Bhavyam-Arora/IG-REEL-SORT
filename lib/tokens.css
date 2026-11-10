@@ -1,0 +1,56 @@
+/* lib/tokens.css — Sortcut's design tokens, the same as sortcut.co.
+   The one place they're defined: popup.html links this file, and the manifest
+   injects it into Instagram for the on-page UI (content.js).
+
+   Scoped to [data-sortcut] rather than :root, so on Instagram they sit only
+   on our own elements: Instagram's custom properties can't reach them, and
+   ours can't reach Instagram. Nothing else is styled here. */
+[data-sortcut] {
+  --ink: #0C0B10;
+  --ink-2: #3A3940;
+  --gray: #6E6D76;
+  --gray-2: #A3A1AB;
+  --line: #E9E7EE;
+  --line-2: #DCD9E3;
+  --bg: #FFFFFF;
+  --bg-2: #F6F5F8;
+  --pink: #D62976;
+  --ig: linear-gradient(45deg, #FEDA75 0%, #FA7E1E 22%, #D62976 50%, #962FBF 76%, #4F5BD5 100%);
+  --ig-btn: linear-gradient(90deg, #F77737 0%, #E1306C 45%, #C13584 72%, #833AB4 100%);
+
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", Roboto, sans-serif;
+
+  --r-card: 16px;
+  --r-input: 10px;
+  --r-pill: 999px;
+
+  --focus: rgba(214, 41, 118, .45);
+  --shadow-btn: 0 6px 18px rgba(214, 41, 118, .28);
+  --shadow-card: 0 1px 2px rgba(12, 11, 16, .04), 0 8px 24px rgba(12, 11, 16, .06);
+  --shadow-float: 0 10px 34px rgba(12, 11, 16, .16);
+
+  /* Failure cards: a red tint of the same family. */
+  --bad: #C42B4B;
+  --bad-bg: #FDF2F4;
+  --bad-line: #F5D3DB;
+
+  /* The dark gradient under a tile's numbers, and its badges. */
+  --scrim: rgba(12, 11, 16, .62);
+}
+
+/* Instagram's dark theme (content.js detects it). The popup is always light. */
+[data-sortcut][data-theme="dark"] {
+  --ink: #F5F4F8;
+  --ink-2: #D4D2DB;
+  --gray: #9C9AA5;
+  --gray-2: #6E6D76;
+  --line: #2A2930;
+  --line-2: #36353D;
+  --bg: #16151B;
+  --bg-2: #222128;
+  --bad: #FF8FA6;
+  --bad-bg: #2C1820;
+  --bad-line: #4A2330;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px rgba(0, 0, 0, .35);
+  --shadow-float: 0 10px 34px rgba(0, 0, 0, .5);
+}

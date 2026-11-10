@@ -23,12 +23,13 @@
     {
       "matches": ["https://www.instagram.com/*"],
       "js": ["content.js"],
+      "css": ["lib/tokens.css"],
       "run_at": "document_start"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["lib/extract.js", "page/interceptor.js", "page/collector.js"],
+      "resources": ["lib/extract.js", "page/interceptor.js", "page/collector.js", "icons/128.png"],
       "matches": ["https://www.instagram.com/*"]
     }
   ]
