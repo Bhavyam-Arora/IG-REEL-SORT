@@ -48,6 +48,7 @@ function loadPopup(opts) {
   const toWorker = [];
   const changed = [];
   const pendingSends = [];
+  const pendingUpgrades = [];
   const plan = () => ({
     plan: opts.pro ? "pro_monthly" : "none", pro: !!opts.pro, freeMaxReels: 50
   });
@@ -78,6 +79,8 @@ function loadPopup(opts) {
         if (msg.type === "reportPreview" && opts.reportPreview) cb(opts.reportPreview(msg));
         if (msg.type === "sendReport") pendingSends.push(cb);
         if (msg.type === "declineReport") cb({ ok: true });
+        // Upgrade is answered only when the test says, with p.answerUpgrade().
+        if (msg.type === "upgrade") pendingUpgrades.push(cb);
       }
     },
     tabs: {
@@ -131,6 +134,7 @@ function loadPopup(opts) {
     },
     status: () => ($("status").hidden ? null : $("status").textContent),
     answerSend: (reply) => pendingSends.splice(0).forEach((cb) => cb(reply)),
+    answerUpgrade: (reply) => pendingUpgrades.splice(0).forEach((cb) => cb(reply)),
     click: (id) => $(id).dispatchEvent({ type: "click" }),
     key: (key) => document.dispatchEvent({ type: "keydown", key }),
     text: () => document.body.textContent
@@ -746,4 +750,29 @@ test("list: a plan change that moves a choice moves the check with it", () => {
   assert.deepEqual(checked(p, "sortList"), ["likes"]);
   assert.deepEqual(checked(p, "limitSeg"), ["50"]);
   assert.equal(p.$("planPill").textContent, "Free");
+});
+
+// ---- Upgrade ----
+
+test("Upgrade: asks the worker to open checkout; one ask however often it's clicked", () => {
+  const p = loadPopup({ pro: false });
+  p.click("upgrade");
+  p.click("upgrade");
+  assert.deepEqual(p.toWorker.filter((m) => m.type === "upgrade").map((m) => ({ ...m })), [{ type: "upgrade" }]);
+  assert.equal(p.$("upgrade").textContent, "Opening checkout…");
+
+  p.answerUpgrade({ ok: true });
+  assert.equal(p.$("upgrade").textContent, "Upgrade to Pro");
+  assert.equal(p.$("accountNote").hidden, true);
+});
+
+test("Upgrade: a failure (cancelled sign-in, a refusal) shows the worker's words", () => {
+  const p = loadPopup({ pro: false, signedIn: false });
+  p.click("upgrade");
+  p.answerUpgrade({ ok: false, error: "Sign-in was cancelled." });
+  assert.equal(p.$("accountNote").textContent, "Sign-in was cancelled.");
+  assert.equal(p.$("accountNote").hidden, false);
+  assert.equal(p.$("upgrade").textContent, "Upgrade to Pro");
+  p.click("upgrade");
+  assert.equal(p.toWorker.filter((m) => m.type === "upgrade").length, 2, "can try again");
 });

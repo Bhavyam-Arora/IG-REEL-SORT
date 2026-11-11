@@ -575,6 +575,25 @@ $("signIn").addEventListener("click", function () {
   accountCall("signIn");
 });
 
+// Upgrade: the worker signs in if needed, then opens the dashboard's checkout
+// in a new tab. The link's href (the pricing page) is only a fallback.
+$("upgrade").addEventListener("click", function (ev) {
+  ev.preventDefault();
+  if ($("upgrade").getAttribute("aria-disabled") === "true") return;
+  $("upgrade").setAttribute("aria-disabled", "true");
+  $("upgrade").textContent = "Opening checkout\u2026";
+  accountNote("");
+  chrome.runtime.sendMessage({ type: "upgrade" }, function (res) {
+    $("upgrade").removeAttribute("aria-disabled");
+    $("upgrade").textContent = "Upgrade to Pro";
+    if (chrome.runtime.lastError || !res) {
+      accountNote("Extension worker unavailable \u2014 reload the extension.");
+      return;
+    }
+    if (!res.ok) accountNote(res.error);
+  });
+});
+
 $("signOut").addEventListener("click", function () {
   $("signOut").disabled = true;
   accountCall("signOut");

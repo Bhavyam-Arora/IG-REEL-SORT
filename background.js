@@ -1165,6 +1165,25 @@ async function fetchDirectory() {
   return data;
 }
 
+// ---- Upgrade ----
+// The one Upgrade button, in the popup and in the page's Upgrade dialog
+// (decisions.md §16 C9). Signs in first if needed, asks the backend for a
+// one-time handoff code, and opens the dashboard's checkout with it in the URL
+// fragment, so the page is signed in as this user without a second Google
+// sign-in. The code lives 2 minutes and works once; it's never stored or logged.
+var HANDOFF_CODE = /^[A-Za-z0-9_-]{43}$/;
+var CHECKOUT_FAILED = "Couldn't open checkout. Please try again.";
+
+async function startUpgrade() {
+  if (!(await getAuth())) await signIn();
+  var res = await api("/v1/auth/handoff", { method: "POST" });
+  if (!res.ok) throw new Error((res.data && res.data.error) || CHECKOUT_FAILED);
+  var code = res.data && res.data.code;
+  if (typeof code !== "string" || !HANDOFF_CODE.test(code)) throw new Error(CHECKOUT_FAILED);
+  await chrome.storage.session.set({ [UPGRADE_KEY]: Date.now() });
+  await chrome.tabs.create({ url: CHECKOUT_URL + "#code=" + code });
+}
+
 async function account() {
   var a;
   if (!(await getAuth())) {
@@ -1261,6 +1280,10 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     return reply(planInfo(), sendResponse, function (p) { return { ok: true, plan: p }; });
   }
   if (msg.type === "signIn") return reply(signIn().then(account), sendResponse, asAccount);
+  // From the popup's Upgrade link or the page's Upgrade dialog.
+  if (msg.type === "upgrade") {
+    return reply(startUpgrade(), sendResponse, function () { return { ok: true }; });
+  }
   // Answered when the sheet is open, or failed. The popup has usually closed
   // by then; it reads the outcome from session storage instead.
   if (msg.type === "sheetsExport") {

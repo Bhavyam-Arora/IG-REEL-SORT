@@ -388,11 +388,12 @@ test("signed out: closed while Google's window is up, the sign-in doesn't start 
 
 // ---- Free: the Upgrade dialog ----
 
-const PRICING = "https://sortcut.co/pricing.html";
 const NEEDS_PRO = { ok: false, needsPro: true, error: "Transcription is part of Sortcut Pro." };
 
-test("signed in on Free: the Upgrade dialog, which opens the pricing page", () => {
-  const page = loadContent({ onMessage: (msg) => (msg.type === "transcribe" ? NEEDS_PRO : undefined) });
+test("signed in on Free: the Upgrade dialog, which asks the worker to open checkout", () => {
+  const page = loadContent({
+    onMessage: (msg) => (msg.type === "transcribe" ? NEEDS_PRO : msg.type === "upgrade" ? { ok: true } : undefined)
+  });
   page.result(posts);
   const btn = page.document.querySelector(".igs-tx");
   btn.click();
@@ -409,9 +410,26 @@ test("signed in on Free: the Upgrade dialog, which opens the pricing page", () =
   assert.equal(btn.disabled, false);
 
   go.click();
-  assert.deepEqual(page.opened, [[PRICING, "_blank", "noopener"]]);
-  assert.equal(page.document.querySelector(".igs-modal"), null, "closed after opening the page");
-  assert.deepEqual(page.sent.map((m) => m.type), ["transcribe"]);
+  assert.deepEqual(page.opened, [], "the worker opens the tab, not the page");
+  assert.equal(page.document.querySelector(".igs-modal"), null, "closed once checkout opened");
+  assert.deepEqual(page.sent.map((m) => m.type), ["transcribe", "upgrade"]);
+});
+
+test("signed in on Free: Upgrade failing keeps the dialog open with the reason", () => {
+  const page = loadContent({
+    onMessage: (msg) =>
+      msg.type === "transcribe" ? NEEDS_PRO : msg.type === "upgrade" ? { ok: false, error: "Sign-in was cancelled." } : undefined
+  });
+  page.result(posts);
+  page.document.querySelector(".igs-tx").click();
+  const dialog = page.document.querySelector(".igs-dialog");
+  const go = dialog.querySelector(".igs-btn");
+  go.click();
+  assert.ok(page.document.querySelector(".igs-modal"), "still open");
+  assert.equal(dialog.querySelector(".igs-dialog-err").textContent, "Sign-in was cancelled.");
+  assert.equal(dialog.querySelector(".igs-dialog-err").hidden, false);
+  assert.equal(go.disabled, false);
+  assert.equal(go.textContent, "Upgrade to Pro");
 });
 
 test("signed in on Free: × closes the Upgrade dialog and opens nothing", () => {
@@ -1874,7 +1892,8 @@ test("similar accounts: not Pro after all (402), the panel closes for the Upgrad
   assert.equal(dialog.querySelector(".igs-btn").textContent, "Upgrade to Pro");
   assert.equal(page.document.querySelector(".igs-similar"), null, "and the button goes");
   dialog.querySelector(".igs-btn").click();
-  assert.deepEqual(page.opened, [[PRICING, "_blank", "noopener"]]);
+  assert.equal(page.sent[page.sent.length - 1].type, "upgrade", "the worker opens checkout");
+  assert.deepEqual(page.opened, []);
 });
 
 // ---- The pending sort, in the tab Sort reels opened ----

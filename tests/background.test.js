@@ -45,6 +45,7 @@ function loadWorker(opts) {
   const warnings = [];
   const logs = [];
   const pings = [];
+  const created = []; // chrome.tabs.create urls
   const intervals = new Set();
   let onMessage = null;
   const lifecycle = { installed: [], startup: [] };
@@ -72,7 +73,11 @@ function loadWorker(opts) {
           throw new Error("closed");
         }
       },
-      tabs: { sendMessage: async () => {}, onRemoved: { addListener: (fn) => (onRemoved = fn) } }
+      tabs: {
+        sendMessage: async () => {},
+        onRemoved: { addListener: (fn) => (onRemoved = fn) },
+        create: async (o) => (created.push(o.url), { id: 9 })
+      }
     },
     fetch: async (url, init) => {
       calls.push(url);
@@ -107,6 +112,7 @@ function loadWorker(opts) {
     warnings,
     logs,
     pings,
+    created,
     intervals,
     run: (code) => vm.runInContext(code, w),
     send: (msg) =>
@@ -1292,4 +1298,94 @@ test("isPro: the page's question, answered from /v1/me", async () => {
   const free = directoryWorker(() => res(500), { routes: { [ME]: me("free") } });
   assert.deepEqual(plain(await free.send({ type: "isPro" })), { ok: true, pro: false });
   assert.deepEqual(plain(await loadWorker({ signedIn: false }).send({ type: "isPro" })), { ok: true, pro: false });
+});
+
+// ---- Upgrade: a one-time handoff code, then the dashboard's checkout ----
+
+const HANDOFF = "amazonaws.com/v1/auth/handoff";
+const CHECKOUT = "https://accounts.sortcut.co/checkout";
+const CODE = "A".repeat(20) + "b-_" + "9".repeat(20); // 43 base64url characters
+
+test("upgrade: asks for a handoff code with the access token, opens checkout with it in the fragment", async () => {
+  let init = null;
+  const sw = loadWorker({ routes: { [HANDOFF]: (url, i) => ((init = i), res(200, { body: { code: CODE, expiresIn: 120 } })) } });
+  const before = Date.now();
+  const r = await sw.fromPopup({ type: "upgrade" });
+  assert.deepEqual({ ...r }, { ok: true });
+  assert.equal(init.method, "POST");
+  assert.equal(init.headers.Authorization, "Bearer a");
+  assert.deepEqual(sw.created, [CHECKOUT + "#code=" + CODE], "no plan, no price: the page preselects Monthly");
+  assert.ok(sw.session.upgradeStartedAt >= before);
+  assert.ok(!sw.logs.concat(sw.warnings).join("\n").includes(CODE), "the code is never logged");
+});
+
+test("upgrade: from the page's Upgrade dialog too", async () => {
+  const sw = loadWorker({ routes: { [HANDOFF]: () => res(200, { body: { code: CODE } }) } });
+  assert.equal((await sw.fromTab({ type: "upgrade" })).ok, true);
+  assert.deepEqual(sw.created, [CHECKOUT + "#code=" + CODE]);
+});
+
+test("upgrade: signed out signs in first; a closed Google window opens nothing", async () => {
+  const sw = loadWorker({ signedIn: false, routes: { [HANDOFF]: () => res(200, { body: { code: CODE } }) } });
+  const r = await sw.fromPopup({ type: "upgrade" });
+  assert.equal(r.ok, false);
+  assert.equal(r.error, "Sign-in was cancelled.");
+  assert.deepEqual(sw.calls, ["launchWebAuthFlow"], "no handoff asked");
+  assert.deepEqual(sw.created, []);
+});
+
+test("upgrade: the backend's refusal is shown in its words; a malformed code opens nothing", async () => {
+  const refused = loadWorker({
+    routes: { [HANDOFF]: () => res(403, { body: { error: "This account is not active. Please contact support@sortcut.co." } }) }
+  });
+  const r = await refused.fromPopup({ type: "upgrade" });
+  assert.equal(r.ok, false);
+  assert.equal(r.error, "This account is not active. Please contact support@sortcut.co.");
+  assert.deepEqual(refused.created, []);
+
+  for (const code of ["short", "", null, CODE + "x", "A".repeat(42) + "="]) {
+    const bad = loadWorker({ routes: { [HANDOFF]: () => res(200, { body: { code } }) } });
+    const b = await bad.fromPopup({ type: "upgrade" });
+    assert.equal(b.error, "Couldn't open checkout. Please try again.", String(code));
+    assert.deepEqual(bad.created, []);
+    assert.equal(bad.session.upgradeStartedAt, undefined);
+  }
+});
+
+test("after Upgrade, /v1/me is asked afresh until it says Pro, then cached again", async () => {
+  let current = "none";
+  const sw = loadWorker({
+    routes: {
+      [HANDOFF]: () => res(200, { body: { code: CODE } }),
+      [ME]: () => res(200, { body: { email: "test@example.com", plan: current } })
+    }
+  });
+  const meCalls = () => sw.calls.filter((u) => u.indexOf(ME) !== -1).length;
+  await plan(sw);
+  await plan(sw);
+  assert.equal(meCalls(), 1, "before Upgrade: cached");
+
+  await sw.fromPopup({ type: "upgrade" });
+  await plan(sw);
+  await plan(sw);
+  assert.equal(meCalls(), 3, "waiting for the payment: asked every time");
+
+  current = "pro_monthly";
+  assert.equal((await plan(sw)).pro, true);
+  assert.equal(sw.session.upgradeStartedAt, undefined, "Pro: stop watching");
+  await plan(sw);
+  assert.equal(meCalls(), 4, "cached again");
+});
+
+test("after Upgrade, the watch ends after an hour, and on sign-out", async () => {
+  const sw = loadWorker({ routes: { [ME]: me("none") } });
+  sw.session.upgradeStartedAt = Date.now() - 61 * 60e3;
+  await plan(sw);
+  await plan(sw);
+  assert.equal(sw.calls.filter((u) => u.indexOf(ME) !== -1).length, 1, "over an hour: cached as usual");
+
+  const out = loadWorker({ routes: { "/v1/auth/logout": () => res(204) } });
+  out.session.upgradeStartedAt = Date.now();
+  await out.fromPopup({ type: "signOut" });
+  assert.equal(out.session.upgradeStartedAt, undefined);
 });

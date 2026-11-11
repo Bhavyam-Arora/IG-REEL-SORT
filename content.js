@@ -494,7 +494,6 @@
   // sign-in dialog when signed out (Google only opens from its button), the
   // Upgrade dialog on Free. One dialog at a time; opening another abandons the
   // first.
-  var PRICING_URL = "https://sortcut.co/pricing.html";
   var dialog = null; // { close }
 
   function closeDialog() {
@@ -623,9 +622,24 @@
       title: o.title || "Upgrade to transcribe",
       text: o.text || "Transcription is part of Sortcut Pro.",
       action: "Upgrade to Pro",
+      // The worker opens the dashboard's checkout (signed in through a
+      // one-time handoff code); a failure stays in the dialog.
       onAction: function (ui) {
-        window.open(PRICING_URL, "_blank", "noopener");
-        ui.close();
+        ui.go.disabled = true;
+        ui.go.textContent = "Opening checkout…";
+        ui.err.hidden = true;
+        chrome.runtime.sendMessage({ type: "upgrade" }, function (res) {
+          var failed = chrome.runtime.lastError || !res || !res.ok;
+          if (!ui.isOpen()) return;
+          if (failed) {
+            ui.go.disabled = false;
+            ui.go.textContent = "Upgrade to Pro";
+            ui.err.textContent = (res && res.error) || "Extension worker unavailable — reload the extension.";
+            ui.err.hidden = false;
+            return;
+          }
+          ui.close();
+        });
       }
     });
   }
