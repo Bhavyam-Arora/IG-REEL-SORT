@@ -10,7 +10,7 @@ const vm = require("vm");
 const ROOT = path.join(__dirname, "..");
 const S3 = "https://bucket.test/upload";
 const CDN = "https://scontent.cdninstagram.com/v/reel.mp4";
-const ME = "amazonaws.com/v1/me";
+const ME = "api.sortcut.co/v1/me";
 const HOUR = 3600e3;
 const MANIFEST = JSON.parse(fs.readFileSync(path.join(ROOT, "manifest.json"), "utf8"));
 
@@ -764,7 +764,7 @@ test("rules: asked while a newer copy is stored, the newer copy is the answer", 
 // lib/remote-rules.js accepts (tests/remote-rules.test.js has the checks).
 
 const V3_TEXT = fs.readFileSync(path.join(__dirname, "fixtures/rules-v3-response.json"), "utf8");
-const RULES_ROUTE = "amazonaws.com/v1/rules";
+const RULES_ROUTE = "api.sortcut.co/v1/rules";
 const v3 = () => res(200, { body: V3_TEXT });
 const rulesCalls = (sw) => sw.calls.filter((u) => u.indexOf(RULES_ROUTE) !== -1);
 const bundledVersion = (sw) => sw.run("SORTCUT_RULES.version");
@@ -1123,7 +1123,7 @@ test("report: the browser, named the backend's way, with its major version", asy
 
 // ---- Similar accounts (GET /v1/directory) ----
 
-const DIR_URL = "amazonaws.com/v1/directory";
+const DIR_URL = "api.sortcut.co/v1/directory";
 const DIRECTORY = {
   version: 3,
   niches: [{ name: "Fitness", count: 2, filters: [{ name: "Yoga", count: 1 }, { name: "Strength", count: 1 }] }],
@@ -1156,7 +1156,7 @@ test("directory: fetched with the sign-in, then kept with its version and time",
   const r = await sw.send({ type: "directory" });
   assert.equal(r.ok, true, r.error);
   assert.deepEqual(plain(r.directory), DIRECTORY);
-  assert.deepEqual(sw.asked.map((a) => a.url), ["https://uc7bn8aln5.execute-api.ap-southeast-2.amazonaws.com/v1/directory"]);
+  assert.deepEqual(sw.asked.map((a) => a.url), ["https://api.sortcut.co/v1/directory"]);
   assert.equal(sw.asked[0].auth, "Bearer a");
   assert.equal(sw.local.directory.version, 3);
   assert.deepEqual(plain(sw.local.directory.data), DIRECTORY);
@@ -1302,7 +1302,7 @@ test("isPro: the page's question, answered from /v1/me", async () => {
 
 // ---- Upgrade: a one-time handoff code, then the dashboard's checkout ----
 
-const HANDOFF = "amazonaws.com/v1/auth/handoff";
+const HANDOFF = "api.sortcut.co/v1/auth/handoff";
 const CHECKOUT = "https://accounts.sortcut.co/checkout";
 const CODE = "A".repeat(20) + "b-_" + "9".repeat(20); // 43 base64url characters
 

@@ -1,8 +1,10 @@
 {
   "name": "sortcut-extension",
   "private": true,
-  "description": "Not published. Exists only so `npm test` runs the Node test suite.",
+  "description": "Not published to npm. Runs the Node test suite and the dev and release builds.",
   "scripts": {
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "build:dev": "node scripts/build-dev.js",
+    "release": "node scripts/release.js"
   }
 }

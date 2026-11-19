@@ -359,6 +359,22 @@ gitignored and run only where they are present.
 
 After any code change, click the reload arrow on the extension card.
 
+This folder is the prod build (`api.sortcut.co`). To test against dev without
+editing tracked files, run `npm run build:dev` and load `dist/dev` instead (the
+dev API and upload bucket swapped in; same extension ID, so remove the other
+unpacked copy first). Rerun it after every change.
+
+## Release
+
+```
+npm run release   # writes dist/sortcut-<version>.zip for the Chrome Web Store
+```
+
+It packages only the files the extension loads (no tests, fixtures, scripts or
+git-ignored samples), drops the manifest `key` from the zip (the Web Store
+rejects it; the repo keeps it to pin the extension ID), and refuses if anything
+still points at dev.
+
 ## Files
 
 | File | World | Purpose |
@@ -376,6 +392,7 @@ After any code change, click the reload arrow on the extension card.
 | `page/collector.js` | page | Scroll loop, stop rules, sort, handoff |
 | `popup.*` | — | UI |
 | `tests/` | node | `node --test` suite and synthetic fixtures |
+| `scripts/` | node | `npm run build:dev` and `npm run release` |
 
 ## Rules that must not be broken
 

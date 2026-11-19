@@ -6,3 +6,5 @@ tests/fixtures/profile-grid-api-graphql-2026-10.json
 tests/fixtures/*-api-graphql-*.json
 # Files the "Save debug sample" button downloads, if one lands in the repo.
 *-debug-sample-*.json
+# Build output: npm run build:dev (dist/dev) and npm run release (the Web Store zip).
+/dist/

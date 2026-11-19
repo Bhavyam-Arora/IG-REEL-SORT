@@ -12,7 +12,7 @@ const vm = require("vm");
 const ROOT = path.join(__dirname, "..");
 const DRIVE = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart";
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
-const API = "amazonaws.com";
+const API = "api.sortcut.co";
 const IG_TAB = 42;
 const CSV = '"code","url","views"\r\n"AAA","https://www.instagram.com/p/AAA/","2500"';
 const SIGNED_IN = { accessToken: "sortcut-a", refreshToken: "sortcut-r", accessExpiresAt: Date.now() + 3600e3 };
